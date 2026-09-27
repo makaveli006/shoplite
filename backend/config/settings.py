@@ -10,22 +10,41 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
+import os
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Read backend/.env into os.environ. Variables that already exist in the real
+# environment (e.g. set by Docker Compose) win over values in the file.
+load_dotenv(BASE_DIR / '.env')
+
+
+def env_bool(name, default=False):
+    """Read an environment variable as True/False ("true", "1", "yes", "on" count as True)."""
+    return os.getenv(name, str(default)).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def env_list(name, default=''):
+    """Read a comma-separated environment variable as a list: "a, b" -> ['a', 'b']."""
+    return [item.strip() for item in os.getenv(name, default).split(',') if item.strip()]
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-b#$s1+d!=*6dvm2k4^_+=w43xz($ui#(te&vw1x84o7y^u$3yv'
+# No default on purpose: if it's missing, Django refuses to start (fail fast).
+SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Defaults to False so a forgotten setting is the safe choice.
+DEBUG = env_bool('DJANGO_DEBUG', False)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1')
 
 
 # Application definition
