@@ -1,0 +1,6 @@
+# Let Git normalise line endings for all text files
+* text=auto
+
+# Files that run inside Linux containers must keep LF (Unix) line endings
+*.sh       text eol=lf
+Dockerfile text eol=lf

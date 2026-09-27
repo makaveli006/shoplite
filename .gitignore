@@ -1,0 +1,30 @@
+# ---------- Secrets (never commit real credentials) ----------
+.env
+.env.*
+!.env.example
+
+# ---------- Python / uv ----------
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ---------- Django ----------
+backend/media/
+backend/staticfiles/
+*.sqlite3
+
+# ---------- Node / Vite ----------
+node_modules/
+dist/
+*.local
+
+# ---------- Editors & operating system ----------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
