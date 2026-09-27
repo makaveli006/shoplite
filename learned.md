@@ -695,3 +695,186 @@ uv run django-admin --version
 - Both version checks print 5.1.7. django-admin is Django's command-line tool, installed into .venv\Scripts\. We use it in Lesson 2.2.
 
 Optionally, open uv.lock in your editor and scroll through it. You'll find each package's exact version and hash = "sha256:..." lines. Just look; don't edit.
+
+
+
+
+What & why
+
+Django is installed, but we have no Django project yet. Today django-admin startproject generates the skeleton: the settings file, the main URL list, and manage.py. We start the development server and see the first page. Then we trace what happened for that one request.
+
+Files that will appear (inside backend\)
+backend/
+├── manage.py          ← NEW: your command centre (runserver, migrate, shell, test...)
+├── config/            ← NEW: the project's configuration package
+│   ├── __init__.py    ←   marks the folder as a Python package
+│   ├── settings.py    ←   ALL configuration: installed apps, database, security...
+│   ├── urls.py        ←   the root URL table: which URL goes to which view
+│   ├── asgi.py        ←   entry point for async servers (production)
+│   └── wsgi.py        ←   entry point for classic servers like gunicorn (production)
+├── main.py            ← DELETE: uv's sample, not needed with Django
+└── pyproject.toml, uv.lock, .python-version, README.md  (from Lesson 2.1)
+
+
+Concept 1: Framework
+
+🧒 Simple: Building a website from scratch is like building a restaurant from bare land: plumbing, electrics, fire exits, a till system. A framework is a pre-built restaurant shell with all of that installed and inspected. You only design the menu and decorate.
+
+🛠️ Developer: Django gives you, ready-made:
+- an HTTP request/response layer and URL routing
+- an ORM (Python classes ↔ SQL tables) and a migration system
+- authentication, sessions, and password hashing
+- an auto-generated admin site
+- forms and validation, security protections (CSRF, XSS, clickjacking, SQL injection), and a test runner
+
+The framework calls your code at the right moments. That's "inversion of control": you write views and models, and Django decides when to run them.
+
+Concept 2: Project vs. app
+
+🧒 Simple: The project is the whole shopping mall: building rules, opening hours, security desk, the directory board at the entrance. Apps are the individual shops inside it: the product catalogue shop, the cart shop, the orders shop. Each shop is self-contained, but they all follow the mall's rules.
+
+🛠️ Developer:
+- an auto-generated admin site
+- forms and validation, security protections (CSRF, XSS, clickjacking, SQL injection), and a test runner
+
+The framework calls your code at the right moments. That's "inversion of control": you write views and models, and Django decides when to run them.
+
+Concept 2: Project vs. app
+
+🧒 Simple: The project is the whole shopping mall: building rules, opening hours, security desk, the directory board at the entrance. Apps are the individual shops inside it: the product catalogue shop, the cart shop, the orders shop. Each shop is self-contained, but they all follow the mall's rules.
+
+🛠️ Developer:
+- The project (config/) is global configuration: settings.py plus the root urls.py. We named it config rather than ecommerce because that says what it is: configuration.
+- An app is a Python package with one responsibility (models, views, serializers, admin, tests), registered in INSTALLED_APPS.
+- We'll create accounts, catalog, cart, orders, and core apps. Django's own features are apps too: django.contrib.admin, django.contrib.auth, and so on.
+
+Concept 3: The request → response cycle
+
+🧒 Simple: A letter arrives at the mall. Security checks it (mard says which shop it's for (URLs). The shopkeeper writes a
+reply (view). The reply goes back out through security, which , and it's sent to the customer.
+
+🛠️ Developer: For GET http://127.0.0.1:8000/admin/:
+Browser ──HTTP──▶ runserver (WSGI server)
+                    │ builds an HttpRequest object
+                    ▼
+               MIDDLEWARE (top → bottom)   security headers, sessions, CSRF, auth (sets request.user)...
+                    ▼
+               ROOT_URLCONF = config/urls.py   urlpatterns matched top → bottom
+                    ▼
+               view function / class        your code: may query the DB via the ORM
+                    ▼ returns HttpResponse
+               MIDDLEWARE (bottom → top)    may add headers / cookies
+                    ▼
+Browser ◀──HTTP── status code + headers + body
+Every Django feature we add plugs into one of these stages. For example, CORS (Phase 5) is a middleware, and DRF API views are views.
+
+Concept 4: manage.py and settings
+
+🧒 Simple: manage.py is the mall manager's walkie-talkie: "start the doors," "update the floor plan," "run a safety drill." settings.py is the mall's rulebook that the manager reads first.
+
+🛠️ Developer:
+- manage.py sets the environment variable DJANGO_SETTINGS_MODULE=config.settings, then hands your command (runserver, migrate, shell, test, …) to Django's management framework.
+- Django imports settings.py once at startup. Every setting is a plain Python constant. That's why we can compute values from environment variables in Lesson 2.3.
+- django-admin is the same tool without a project attached. It's used only this once, to create the project.
+
+
+
+
+▶️ Your turn (PowerShell)
+
+Step 1: Leave the activated venv and go to backend\
+
+deactivate
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+
+Step 2: Generate the project
+
+uv run django-admin startproject config .
+
+┌───────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│         Part          │                                                           Meaning                                                           │
+├───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ uv run                │ run inside backend\.venv (where Django is installed)                                                                        │
+├───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ django-admin          │ Django's project generator                                                                                                  │
+│ startproject          │                                                                                                                             │
+├───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ config                │ name of the project package, so the folder is config/                                                                       │
+├───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ .                     │ put it in the current folder. Without the dot, Django creates config/config/settings.py (an extra nesting level), which     │
+│                       │ confuses beginners and adds nothing.                                                                                        │
+└───────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+Then remove uv's sample file and look at the result:
+Remove-Item main.py
+Get-ChildItem
+Get-ChildItem config
+Expected: manage.py and config\ next to pyproject.toml; inside config\: __init__.py, asgi.py, settings.py, urls.py, wsgi.py.
+
+
+
+Step 3: Read the generated files
+
+Open backend\ in your editor. In VS Code, code . works from this folder. Read these files while checking the notes below.
+
+manage.py, the key line:
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+→ "if nobody said otherwise, the settings live in config/settings.py."
+
+config/settings.py, the important settings:
+
+┌──────────────────────────────────┬────────────────────────────────────────────────────────────────────────────────────┬─────────────────────────────┐
+│             Setting              │                                    What it does                                    │      What we'll change      │
+├──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ BASE_DIR                         │ Path of backend\, computed from this file's location. Used to build other paths.   │ Nothing                     │
+├──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ SECRET_KEY =                     │ Signs sessions, password-reset tokens, and (later) JWTs. Anyone who has it can     │ Move to .env (Lesson 2.3)   │
+│ 'django-insecure-...'            │ forge them.                                                                        │                             │
+├──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ DEBUG = True                     │ Shows detailed error pages. Never in production, because it leaks code and         │ From .env                   │
+│                                  │ settings.                                                                          │                             │
+├──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ ALLOWED_HOSTS = []               │ Which domain names this server answers to. With DEBUG=True, localhost is allowed   │ From .env                   │
+│                                  │ automatically.                                                                     │                             │
+├──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ INSTALLED_APPS                   │ Every app Django loads: admin, auth, sessions, etc.                                │ Add DRF, our apps, and more │
+├──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ MIDDLEWARE                       │ The security/session/auth pipeline from Concept 3, in order                        │ Add CORS (Phase 5)          │
+├──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ ROOT_URLCONF = 'config.urls'     │ Where URL matching starts                                                          │ Nothing                     │
+├──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ DATABASES                        │ Currently SQLite (db.sqlite3 file)                                                 │ Switch to Postgres (Lesson  │
+│                                  │                                                                                    │ 2.4)                        │
+├──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ AUTH_PASSWORD_VALIDATORS         │ Rules like "min 8 chars" and "not too common"                                      │ Reused by our register API  │
+├──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ TIME_ZONE = 'UTC', USE_TZ = True │ Store times in UTC and convert for display. Best practice.                         │ Keep                        │
+├──────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ STATIC_URL, DEFAULT_AUTO_FIELD   │ CSS/JS file URLs; primary keys become 64-bit BigAutoField                          │ Keep                        │
+└──────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────┴─────────────────────────────┘
+
+config/urls.py:
+urlpatterns = [
+    path('admin/', admin.site.urls),
+]
+→ right now the site knows exactly one URL prefix: admin/.
+
+Step 4: Start the development server
+
+uv run python manage.py runserver
+Expected output:
+Watching for file changes with StatReloader
+Performing system checks...
+
+System check identified no issues (0 silenced).
+
+You have 18 unapplied migration(s). Your project may not work properly until you apply the migrations for app(s): admin, auth, contenttypes, sessions.
+Run 'python manage.py migrate' to apply them.
+...
+Django version 5.1.7, using settings 'config.settings'
+Starting development server at http://127.0.0.1:8000/
+Quit the server with CTRL-BREAK.
+
+▎ 🛑 IMPORTANT: do not run migrate yet, even though Django suggests it
+▎
+▎ Migrating now would create the built-in auth_user table. We're going to replace Django's default User with our own custom User model (Lesson 2.5), and Django's docs warn that switching the user model after the first migration is very painful. We'll migrate once, properly, in Lesson 2.6. The warning is safe to ignore until then.
