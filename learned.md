@@ -2525,3 +2525,203 @@ exit()
 connection.queries only records queries when DEBUG=True. With 21 products the difference is small, but with 10,000 products and real network latency, that's the difference between a fast page and a timeout. Our API views will use select_related from day one.
 
 ---
+
+
+# select_related('category') : When you fetch the products, also fetch their related Category in the same database query.
+
+
+
+
+
+
+
+What & why
+
+So far only the admin (HTML pages for staff) can show products. Our React frontend, and any mobile app later, needs data, not HTML pages. Today we build the first two endpoints of our REST API:
+- GET /api/products/: the list of products visible in the shop
+- GET /api/products/<slug>/: one product, or 404
+
+Everything is read-only for now. Search, pagination, and admin-only writes come in the next lessons.
+
+Files involved (all written; I verified the endpoints respond)
+backend/
+├── config/settings.py       ← ✏️ 'rest_framework' added to INSTALLED_APPS
+├── config/urls.py           ← ✏️ path('api/', include('catalog.urls'))
+└── catalog/
+    ├── serializers.py       ← NEW: ProductSerializer  (Product object ↔ JSON)
+    ├── views.py             ← ✏️ ProductListView, ProductDetailView
+    └── urls.py              ← NEW: the catalog's URL patterns
+How a request flows through them:
+GET /api/products/chef-knife/
+  │
+  ▼ config/urls.py      'api/'  → include('catalog.urls')        (strips "api/")
+  ▼ catalog/urls.py     'products/<slug:slug>/' → ProductDetailView, with slug='chef-knife'
+  ▼ catalog/views.py    ProductDetailView:
+  │     queryset.get(slug='chef-knife')   → Product object   (or 404 if missing/inactive)
+  │     ProductSerializer(product).data   → Python dict
+  ▼ DRF Response + renderer               → JSON text (or the browsable HTML page)
+Browser / React / PowerShell  ◀── 200 OK  {"id": 7, "name": "Chef Knife", "price": "49.99", ...}
+
+---
+
+Concept 1: API endpoints, and why JSON instead of HTML
+
+🧒 Simple: The admin is like a shop window: nicely arranged for a person to look at. An API is the delivery hatch at the back: goods are handed out in standard boxes (JSON), so anyone can receive them (the website, a phone app, another company's system) and arrange them however they like.
+
+🛠️ Developer: An endpoint is a URL + HTTP method that returns data. REST conventions map resources to URLs:
+
+┌───────────────────────────────┬────────────────────────┐
+│           Endpoint            │        Meaning         │
+├───────────────────────────────┼────────────────────────┤
+│ GET /api/products/            │ the product collection │
+├───────────────────────────────┼────────────────────────┤
+│ GET /api/products/chef-knife/ │ one product item       │
+└───────────────────────────────┴────────────────────────┘
+
+The response body is JSON with Content-Type: application/json. The frontend (Phase 11) fetches that JSON with Axios and renders it with React. The backend knows nothing about the page layout. That separation lets the React app, a mobile app, and scripts all share one API.
+
+Concept 2: Django REST Framework (DRF)
+
+🧒 Simple: Django alone can build shop windows (HTML). DRF adds a well-equipped delivery department: standard boxes, packing rules, a gatekeeper who checks who may collect what, and even a see-through test hatch where you can inspect deliveries in the browser.
+
+🛠️ Developer: DRF adds, on top of Django:
+- Serializers: convert objects to and from JSON, with validation
+- Request/Response: parsing JSON, form, or multipart input; rendering JSON output
+- Generic views and ViewSets: common CRUD behaviour in a few lines
+- Authentication, permissions, and throttling
+- Pagination, filtering, and search
+- The browsable API: HTML pages for exploring endpoints
+
+Adding 'rest_framework' to INSTALLED_APPS activates its templates and static files (for the browsable API). The package itself was already installed in Lesson 2.1.
+
+Concept 3: Serializers
+
+🧒 Simple: A serializer is a packing clerk with a checklist. Going out, it takes a product from the warehouse and packs the listed fields into a standard box (JSON). Coming in (later lessons), it unpacks a box sent by a customer, checks every item against the rules, and only then lets it into the warehouse.
+
+🛠️ Developer:
+- ModelSerializer inspects the model and auto-creates matching serializer fields: types, max_length, validators, read_only for auto fields.
+- Output: serializer.data → to_representation() → a dict of JSON-friendly values.
+- Input: serializer.is_valid() → to_internal_value() + validators → serializer.validated_data → .save().
+- Meta.fields is an explicit allow-list. Always list fields explicitly rather than using '__all__', so a new sensitive field (say, cost_price) never leaks into the API by accident.
+
+Look at a few choices DRF made in our JSON:
+
+┌────────────┬────────────────────────────────────────────┬────────────────────────────────────────────────────────────────────────────────────────────┐
+│   Field    │                 JSON value                 │                                            Why                                             │
+├────────────┼────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┤
+│ price      │ "12.50", a string                          │ JSON numbers are binary floats in JavaScript, which would blur money (Lesson 3.1). DRF     │
+│            │                                            │ sends Decimals as exact strings by default, and the frontend formats them for display.     │
+├────────────┼────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┤
+│ created_at │ "2026-09-27T15:18:46.871330Z"              │ ISO 8601 in UTC (Z), which every language can parse                                        │
+├────────────┼────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┤
+│ image      │ "http://127.0.0.1:8000/media/products/..." │ DRF builds an absolute URL from the request's host, so the React app on another port can   │
+│            │                                            │ load it                                                                                    │
+├────────────┼────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┤
+│ category   │ 2                                          │ just the foreign key id for now. In Lesson 4.2 we'll nest {"id": 2, "name": "Kitchen",     │
+│            │                                            │ "slug": "kitchen"}.                                                                        │
+└────────────┴────────────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────┘
+
+Concept 4: Generic class-based views
+
+🧒 Simple: Instead of writing the whole "find product, pack it, send it, or say not found" procedure yourself, you hire a trained clerk (a generic view) and give them two pieces of paper: which shelf to take from (queryset) and which checklist to pack with (serializer_class).
+
+🛠️ Developer:
+- ListAPIView handles GET with get_queryset() → paginate (later) → serializer(many=True) → Response.
+- RetrieveAPIView handles GET with get_object(): it filters queryset by lookup_field from the URL, returns 404 if nothing matches, runs object permission checks, then serializes.
+- Every other method (POST, PUT, DELETE) gets 405 Method Not Allowed automatically, because these views only implement get.
+- queryset = Product.objects.filter(is_active=True) means hidden products don't exist as far as the public API is concerned. The Discontinued Travel Mug returns 404 even though it's in the database.
+- .select_related('category') is already there, so when Lesson 4.2 adds category details, we won't get N+1 queries.
+
+Concept 5: Content negotiation (one endpoint, two formats)
+
+🧒 Simple: The same delivery hatch gives a nicely printed report to a person in a browser, and a plain machine-readable box to a program, depending on what the visitor says they can read.
+
+🛠️ Developer:
+- DRF picks a renderer from the request's Accept header. Browsers send Accept: text/html, so they get the browsable API (HTML around the JSON). Axios and PowerShell ask for JSON, so they get raw JSON.
+- ?format=json forces JSON in the browser.
+- The response header Vary: Accept tells caches that the output depends on the Accept header.
+
+---
+
+The code, explained
+
+catalog/serializers.py
+class ProductSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Product
+        fields = ['id', 'name', 'slug', 'description', 'price', 'stock',
+                  'image', 'is_active', 'category', 'created_at', 'updated_at']   # explicit allow-list
+catalog/views.py
+class ProductListView(generics.ListAPIView):
+    queryset = Product.objects.filter(is_active=True).select_related('category')
+    serializer_class = ProductSerializer
+
+class ProductDetailView(generics.RetrieveAPIView):
+    queryset = Product.objects.filter(is_active=True).select_related('category')
+    serializer_class = ProductSerializer
+    lookup_field = 'slug'        # the URL's <slug:slug> is matched against Product.slug
+catalog/urls.py
+urlpatterns = [
+    path('products/', views.ProductListView.as_view(), name='product-list'),
+    path('products/<slug:slug>/', views.ProductDetailView.as_view(), name='product-detail'),
+]
+- <slug:slug> is a path converter. It only matches slug characters (letters, digits, -, _), and passes the value to the view as slug.
+- .as_view() turns the class into a function Django can call once per request.
+
+config/urls.py
+path('api/', include('catalog.urls')),   # every catalog URL gets the "api/" prefix
+
+A small debugging story from my verification
+
+When I tested these endpoints with Django's test client, the first attempt failed with DisallowedHost: Invalid HTTP_HOST header: 'testserver'. The test client pretends to be a host called testserver, and our ALLOWED_HOSTS from Lesson 2.3 only allows localhost and 127.0.0.1. The security setting worked exactly as designed. I re-ran with HTTP_HOST='localhost': 200, 20 products (the 21st is hidden), the Discontinued mug → 404, and Chef Knife's price → "49.99". (Django's real test runner in Phase 9 handles this automatically.)
+
+---
+
+▶️ Your turn
+
+You need two PowerShell windows: one runs the server, the other sends requests.
+
+Window 1:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py check
+uv run python manage.py runserver
+
+Step 1: The browsable API
+
+Open http://127.0.0.1:8000/api/products/
+- You'll see a Product List page. The grey box at the top shows the real response headers: HTTP 200 OK, Allow: GET, HEAD, OPTIONS, Content-Type: application/json, Vary: Accept. Allow doesn't include POST, because this view is read-only.
+- Below it is the JSON: a list of 20 products, newest first (Meta.ordering). Check that Discontinued Travel Mug is missing.
+- Click an image URL. Your uploaded photo opens.
+
+Open http://127.0.0.1:8000/api/products/?format=json. That's the raw JSON, exactly what React will receive.
+
+Step 2: The detail endpoint and 404s
+
+- http://127.0.0.1:8000/api/products/chef-knife/ → one object.
+- http://127.0.0.1:8000/api/products/discontinued-travel-mug/ → 404 with {"detail": "No Product matches the given query."}. It exists in the database but is hidden from the API by the queryset.
+- http://127.0.0.1:8000/api/products/nope/ → the same 404.
+
+Step 3: Call the API from PowerShell, like a program would
+
+Window 2:
+Invoke-RestMethod http://127.0.0.1:8000/api/products/ | Select-Object name, price, stock | Format-Table
+Invoke-RestMethod sends the request, sees application/json, and parses the JSON into PowerShell objects for you. That's why you can pick columns with Select-Object. React's Axios will do the same thing in JavaScript.
+
+curl.exe -i http://127.0.0.1:8000/api/products/chef-knife/
+curl.exe -i shows the raw HTTP response: the status line, headers, and body. (Use curl.exe, not curl. In Windows PowerShell 5.1, curl is an alias for Invoke-WebRequest.)
+
+Step 4: Try the methods that aren't allowed
+
+curl.exe -i -X POST http://127.0.0.1:8000/api/products/
+curl.exe -i -X DELETE http://127.0.0.1:8000/api/products/chef-knife/
+Both → HTTP/1.1 405 Method Not Allowed with {"detail":"Method \"POST\" not allowed."} (and DELETE). Nobody can change products through the API yet. In Lesson 4.4 we'll allow admins only.
+
+Step 5: Read the server log (Window 1)
+
+"GET /api/products/ HTTP/1.1" 200 ...
+"GET /api/products/?format=json HTTP/1.1" 200 ...
+Not Found: /api/products/discontinued-travel-mug/
+"GET /api/products/discontinued-travel-mug/ HTTP/1.1" 404 ...
+Method Not Allowed (POST): /api/products/
+"POST /api/products/ HTTP/1.1" 405 ...
+These are the same HTTP status codes from Lesson 0.1, now produced by your own API.

@@ -17,7 +17,7 @@ Including another URLconf
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
-from django.urls import path
+from django.urls import include, path
 
 # Branding for the admin site.
 admin.site.site_header = 'ShopLite administration'
@@ -26,6 +26,7 @@ admin.site.index_title = 'Store management'
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/', include('catalog.urls')),
 ]
 
 # In development, let runserver serve uploaded files from MEDIA_ROOT.
