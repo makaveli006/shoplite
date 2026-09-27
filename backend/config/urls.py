@@ -17,6 +17,11 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 
+# Branding for the admin site.
+admin.site.site_header = 'ShopLite administration'
+admin.site.site_title = 'ShopLite admin'
+admin.site.index_title = 'Store management'
+
 urlpatterns = [
     path('admin/', admin.site.urls),
 ]

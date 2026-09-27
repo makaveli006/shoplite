@@ -2002,3 +2002,167 @@ SELECT count(*) FROM catalog_category;
 SELECT count(*) FROM catalog_product;
 \q
 Both counts should be 0.
+
+
+
+
+
+What & why
+
+The models and tables exist, but there's no convenient way to add products yet. The Django admin gives shop staff a complete back office for free. Today we configure it for the catalog, and you add real categories and products through the browser. You'll also see the model rules (validators, unique, PROTECT) show up as friendly messages.
+
+Files involved
+backend/
+├── catalog/admin.py   ← ✏️ WRITTEN: CategoryAdmin + ProductAdmin
+└── config/urls.py     ← ✏️ small change: admin site title "ShopLite administration"
+I verified it with manage.py check, which reports no issues. The check framework also validates admin options (e.g. that autocomplete_fields targets an admin with search_fields).
+
+---
+
+Concept 1: ModelAdmin, a configurable back-office screen
+
+🧒 Simple: The admin is a ready-made back-office program. For each kind of record you fill in a settings card: which columns to show in the list, which filters to put on the side, which boxes may be edited directly in the list. Django builds the screens from that card.
+
+🛠️ Developer: @admin.register(Product) connects a model to a ModelAdmin subclass. Its class attributes configure auto-generated views:
+
+┌─────────────────────┬─────────────────────────────────────────────────────────────────┐
+│       Option        │                      Effect in the browser                      │
+├─────────────────────┼─────────────────────────────────────────────────────────────────┤
+│ list_display        │ columns of the list page (fields or methods)                    │
+├─────────────────────┼─────────────────────────────────────────────────────────────────┤
+│ list_filter         │ the filter sidebar (booleans, FKs, and dates get smart filters) │
+├─────────────────────┼─────────────────────────────────────────────────────────────────┤
+│ search_fields       │ a search box: WHERE name ILIKE '%term%' OR ...                  │
+├─────────────────────┼─────────────────────────────────────────────────────────────────┤
+│ list_editable       │ edit these columns directly in the list                         │
+├─────────────────────┼─────────────────────────────────────────────────────────────────┤
+│ prepopulated_fields │ JavaScript fills the slug while you type the name               │
+├─────────────────────┼─────────────────────────────────────────────────────────────────┤
+│ autocomplete_fields │ a search-as-you-type dropdown instead of a giant <select>       │
+├─────────────────────┼─────────────────────────────────────────────────────────────────┤
+│ readonly_fields     │ shown but not editable (timestamps)                             │
+├─────────────────────┼─────────────────────────────────────────────────────────────────┤
+│ actions             │ bulk operations on selected rows                                │
+└─────────────────────┴─────────────────────────────────────────────────────────────────┘
+
+Access follows the permissions from Lesson 2.6: staff users need view/add/change/delete permissions per model, and superusers pass everything.
+
+Concept 2: The "N+1 queries" problem
+
+🧒 Simple: You need the category name for 25 products. The slow way is to walk to the warehouse 25 separate times, once per product. The smart way is one trip with a list.
+
+🛠️ Developer: Showing category in the product list means reading product.category for every row. By default each access fires its own SQL query: 1 query for the list + 25 for categories = N+1. Two fixes are used in our admin:
+- list_select_related = ('category',) makes Django use a SQL JOIN, so products and their categories come back in one query. (It's the admin's version of Product.objects.select_related('category'), which we'll use in the API.)
+- annotate(_product_count=Count('products')) makes the database count the products per category inside the same query, with LEFT JOIN ... GROUP BY, instead of running category.products.count() once per row.
+
+N+1 is the most common performance bug in Django apps, so it's worth recognising early.
+
+Concept 3: Bulk actions and queryset.update()
+
+🧒 Simple: Instead of opening 20 product cards one by one to tick "hidden", you select them all and press one button, and the warehouse updates all 20 in one go.
+
+🛠️ Developer:
+- queryset.update(is_active=False) sends one SQL UPDATE ... WHERE id IN (...). It's fast, but it skips Model.save().
+- That means our slug logic doesn't run (fine here), and auto_now doesn't update updated_at. That's why the actions also pass updated_at=timezone.now() explicitly.
+- timezone.now() returns a timezone-aware UTC datetime, which matches USE_TZ = True. Never use datetime.now() in Django.
+
+---
+
+The code, explained (catalog/admin.py, key parts)
+
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ('name', 'slug', 'product_count', 'created_at')  # 'product_count' is a METHOD below
+    search_fields = ('name',)
+    prepopulated_fields = {'slug': ('name',)}
+
+    def get_queryset(self, request):                     # the query behind the list page
+        return super().get_queryset(request).annotate(_product_count=Count('products'))
+        #                                    'products' = the related_name from Product.category
+
+    @admin.display(description='Products', ordering='_product_count')   # column title + sortable
+    def product_count(self, obj):
+        return obj._product_count
+
+
+@admin.register(Product)
+class ProductAdmin(admin.ModelAdmin):
+    list_display = ('name', 'category', 'price', 'stock', 'is_active', 'updated_at')
+    list_filter = ('is_active', 'category', 'created_at')
+    list_editable = ('price', 'stock', 'is_active')      # edit in the list itself
+    autocomplete_fields = ('category',)                  # requires CategoryAdmin.search_fields
+    list_select_related = ('category',)                  # the N+1 fix
+    actions = ('make_active', 'make_inactive')
+
+    @admin.action(description='Hide selected products from the shop')
+    def make_inactive(self, request, queryset):          # queryset = the rows you ticked
+        updated = queryset.update(is_active=False, updated_at=timezone.now())
+        self.message_user(request, f'{updated} product(s) are now hidden from the shop.')
+
+---
+
+▶️ Your turn
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py runserver
+Open http://127.0.0.1:8000/admin/ and log in with your email. The header now says "ShopLite administration", and a new CATALOG section has Categories and Products.
+
+Step 1: Create categories (and watch the slug fill itself)
+
+Categories → Add category +. Type the name slowly and watch the Slug box fill as you type. That's prepopulated_fields. Create:
+- Kitchen
+- Stationery
+- Home & Garden → the slug becomes home-garden, because & isn't URL-safe and is dropped.
+
+Try to add Kitchen a second time → "Category with this Name already exists." (unique=True).
+
+Step 2: Create products (and trigger the validators)
+
+Products → Add product +. Click the Category box and type kit. That's autocomplete_fields searching as you type. Create these four:
+
+┌──────────────────────┬───────────────┬───────┬───────┐
+│         Name         │   Category    │ Price │ Stock │
+├──────────────────────┼───────────────┼───────┼───────┤
+│ Blue Ceramic Mug     │ Kitchen       │ 12.50 │ 20    │
+├──────────────────────┼───────────────┼───────┼───────┤
+│ Chef Knife           │ Kitchen       │ 49.99 │ 5     │
+├──────────────────────┼───────────────┼───────┼───────┤
+│ Gel Pen Set          │ Stationery    │ 7.99  │ 100   │
+├──────────────────────┼───────────────┼───────┼───────┤
+│ Terracotta Plant Pot │ Home & Garden │ 15.00 │ 0     │
+└──────────────────────┴───────────────┴───────┴───────┘
+
+While doing this, break the rules on purpose:
+- Price 0 → "Ensure this value is greater than or equal to 0.01." That's the Python-side MinValueValidator, the "polite cashier."
+- Price 12.505 → "Ensure that there are no more than 2 decimal places." That's DecimalField(decimal_places=2).
+- Stock -3 → "Ensure this value is greater than or equal to 0." That's PositiveIntegerField.
+- A second product with slug blue-ceramic-mug → "Product with this Slug already exists."
+
+The form never reaches the database with bad data. Django validates first and shows friendly errors, and the Postgres constraints you tested in Lesson 3.3 stay as the safety net behind it.
+
+Step 3: Use the list page features
+
+On Products:
+- Filters (right side): click By is active → Yes, then By category → Kitchen. Watch the URL change to ?category__id__exact=1&is_active__exact=1. Filters are just URL query parameters, the same idea our API will use in Phase 4.
+- Search: type pen.
+- Inline editing: change the Terracotta pot's stock from 0 to 8 directly in the list, then click Save at the bottom.
+- Bulk action: tick Gel Pen Set and Chef Knife, choose "Hide selected products from the shop", and click Go. You get the message "2 product(s) are now hidden...", the Active column shows ❌, and updated_at changed. Then show them again with the other action.
+- Sorting: click the Price column header.
+
+Step 4: See PROTECT in action
+
+Categories: the Products column shows the counts (Kitchen 2, Stationery 1, Home & Garden 1). That's our annotate(Count(...)).
+
+Tick Kitchen → action "Delete selected categories" → Go. Django refuses:
+
+▎ Deleting the selected category would require deleting the following protected related objects: Product: Blue Ceramic Mug, Product: Chef Knife
+
+That's on_delete=models.PROTECT answering the question from Lesson 3.1. Click No, take me back.
+
+Step 5: The admin keeps an audit log
+
+Open any product. The top right has a History button that shows who changed what and when. The admin home page also has a Recent actions box. It's stored in the django_admin_log table:
+docker compose exec db psql -U shoplite -d shoplite -c "SELECT action_time, object_repr, action_flag, change_message FROM django_admin_log ORDER BY action_time DESC LIMIT 5;"
+action_flag: 1 = added, 2 = changed, 3 = deleted.
+
+Stop the server with Ctrl+C.
