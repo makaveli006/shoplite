@@ -1642,3 +1642,363 @@ Step 8: See the password hashes
 
 docker compose exec db psql -U shoplite -d shoplite -c "SELECT id, email, username, is_staff, is_superuser, left(password, 40) AS password_start FROM accounts_user;"
 Two rows. The password column starts with pbkdf2_sha256$870000$.... There are no readable passwords anywhere in the database.
+
+
+What & why
+
+A shop needs things to sell. In this lesson we design the two catalog models and create the catalog app. You create the app yourself. In the next lesson I write the model code into it, and we generate and apply the migration.
+
+What we're building:
+- Category: "Kitchen", "Stationery"… used for browsing and filtering.
+- Product: name, description, price, stock, active/hidden flag, and the category it belongs to. (The product image is added in Lesson 3.5 as a second migration, so you'll also see how Django changes an existing table.)
+
+Files involved
+backend/
+├── catalog/                 ← NEW app: YOU create it with startapp (this lesson)
+│   ├── models.py            ←   Category + Product (I write it: next lesson)
+│   ├── admin.py             ←   admin screens (Lesson 3.4)
+│   └── migrations/          ←   0001_initial.py (next lesson), 0002 for the image (Lesson 3.5)
+└── config/settings.py       ← YOU add 'catalog' to INSTALLED_APPS (this lesson)
+
+---
+
+Concept 1: Field types, choosing the right "box" for each piece of data
+
+🧒 Simple: A paper form has different boxes: a short line for a name, a big box for a description, a box with "$ ." for money, a tick-box for yes/no. Using the wrong box causes trouble. Imagine writing a price in the "name" line.
+
+🛠️ Developer: Each Django field maps to a Postgres column type and brings validation:
+
+┌──────────────────────────────────────────────┬─────────────────────────────┬─────────────┬─────────────────────────────────────────────────────────┐
+│                    Field                     │        Postgres type        │  Used for   │                      Why this one                       │
+├──────────────────────────────────────────────┼─────────────────────────────┼─────────────┼─────────────────────────────────────────────────────────┤
+│ CharField(max_length=200)                    │ varchar(200)                │ name        │ short text with a length limit                          │
+├──────────────────────────────────────────────┼─────────────────────────────┼─────────────┼─────────────────────────────────────────────────────────┤
+│ TextField(blank=True)                        │ text                        │ description │ unlimited text; blank=True = may be left empty in forms │
+├──────────────────────────────────────────────┼─────────────────────────────┼─────────────┼─────────────────────────────────────────────────────────┤
+│ SlugField(unique=True)                       │ varchar + index             │ slug        │ URL-safe identifier, e.g. blue-ceramic-mug              │
+├──────────────────────────────────────────────┼─────────────────────────────┼─────────────┼─────────────────────────────────────────────────────────┤
+│ DecimalField(max_digits=10,                  │ numeric(10,2)               │ price       │ exact money (see Concept 2)                             │
+│ decimal_places=2)                            │                             │             │                                                         │
+├──────────────────────────────────────────────┼─────────────────────────────┼─────────────┼─────────────────────────────────────────────────────────┤
+│ PositiveIntegerField(default=0)              │ integer + CHECK (stock >=   │ stock       │ stock can't be negative, and Postgres itself enforces   │
+│                                              │ 0)                          │             │ it                                                      │
+├──────────────────────────────────────────────┼─────────────────────────────┼─────────────┼─────────────────────────────────────────────────────────┤
+│ BooleanField(default=True)                   │ boolean                     │ is_active   │ hide products without deleting them                     │
+├──────────────────────────────────────────────┼─────────────────────────────┼─────────────┼─────────────────────────────────────────────────────────┤
+│ DateTimeField(auto_now_add=True)             │ timestamptz                 │ created_at  │ set once when the row is created                        │
+├──────────────────────────────────────────────┼─────────────────────────────┼─────────────┼─────────────────────────────────────────────────────────┤
+│ DateTimeField(auto_now=True)                 │ timestamptz                 │ updated_at  │ updated on every save                                   │
+└──────────────────────────────────────────────┴─────────────────────────────┴─────────────┴─────────────────────────────────────────────────────────┘
+
+blank vs. null is a classic confusion:
+- blank=True is a validation rule ("the form may be empty").
+- null=True is a database rule ("the column may store NULL").
+- For text fields, Django's convention is blank=True without null=True, so "empty" is always stored as '' and never as two different kinds of nothing.
+
+Concept 2: Why prices must be DecimalField, never FloatField
+
+🧒 Simple: Floats are like a ruler with slightly blurry markings. 0.1 + 0.2 comes out as "0.30000000000000004". One blurry cent doesn't matter for a physics game, but a shop whose receipts are off by a fraction of a cent fails its accounting.
+
+🛠️ Developer:
+- A float is binary floating point, so 0.1 can't be represented exactly.
+- Python's Decimal and Postgres's numeric are exact base-10 numbers. Decimal('0.1') + Decimal('0.2') == Decimal('0.3') is True.
+- DecimalField(max_digits=10, decimal_places=2) holds prices up to 99,999,999.99.
+- Always build Decimals from strings: Decimal('19.99'), never Decimal(19.99), which inherits the float's blur. You'll try this in the shell in Lesson 3.6.
+
+Concept 3: Slugs
+
+🧒 Simple: A product's "nickname" for web addresses. Instead of /products/7/, you get /products/blue-ceramic-mug/. It's readable, it's shareable, and search engines like it.
+
+🛠️ Developer:
+- A slug contains only lowercase letters, digits, hyphens, and underscores. Django's slugify("Blue Ceramic Mug!") → "blue-ceramic-mug".
+- unique=True gives the slug a unique index, so it can be used to look products up (/api/products/<slug>/ in Phase 4).
+- We'll auto-fill it from the name when it's left blank, by overriding the model's save().
+
+Concept 4: Relationships (ForeignKey, on_delete, related_name)
+
+🧒 Simple: Each product card has a line "Shelf: Kitchen." Many products point to the same shelf, but each product sits on exactly one shelf. That's a one-to-many relationship: one category, many products.
+
+Now, what happens if someone tries to remove the Kitchen shelf while mugs are still on it?
+- CASCADE: throw away all the mugs too 😱
+- PROTECT: refuse. "Move or delete the products first." ✅ Our choice.
+- SET_NULL: the mugs stay, with "Shelf: (none)."
+
+🛠️ Developer:
+- category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name='products') creates a column category_id bigint with a FOREIGN KEY constraint pointing to catalog_category(id), plus an index on it for fast "all products in category X" queries.
+- on_delete is what Django does when the referenced row is deleted:
+
+| Option   | Behaviour                            | Where we'll use it                                                                |
+|----------|--------------------------------------|-----------------------------------------------------------------------------------|
+| CASCADE  | delete the dependents too            | CartItem → Cart (Phase 6)                                                         |
+| PROTECT  | raise ProtectedError, delete nothing | Product → Category                                                                |
+| SET_NULL | set the FK to NULL (needs null=True) | OrderItem → Product (Phase 7), so deleting a product never destroys order history |
+
+- related_name='products' names the reverse direction. From a category you write kitchen.products.all(). Without it, Django would call it product_set.
+
+Concept 5: Two layers of protection (validators and constraints)
+
+🧒 Simple: A shop has a polite cashier who says "sorry, price can't be zero" (a validator), and a locked safe that physically won't accept wrong entries (a database constraint). The cashier gives nice explanations. The safe is the last line of defence if someone bypasses the cashier.
+
+🛠️ Developer:
+- validators=[MinValueValidator(Decimal('0.01'))] runs in model/form/serializer validation, which gives friendly error messages in the admin and API.
+- models.CheckConstraint(condition=models.Q(price__gt=0), name='product_price_positive') becomes a real Postgres CHECK constraint. Even raw SQL, a bug, or a script can't store a price ≤ 0.
+
+(condition= is the Django 5.1 spelling. The older check= argument is deprecated.)
+
+---
+
+The planned model code (I'll write this in the next lesson)
+
+Read it now, so nothing surprises you later:
+from decimal import Decimal
+
+from django.core.validators import MinValueValidator
+from django.db import models
+from django.utils.text import slugify
+
+
+class Category(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    slug = models.SlugField(max_length=120, unique=True, blank=True)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']                  # default sort order (remember: SQL has none by itself!)
+        verbose_name_plural = 'categories'   # otherwise the admin would say "Categorys"
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:                    # auto-fill the slug from the name if it was left blank
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)        # then do the normal save
+
+
+class Product(models.Model):
+    category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name='products')
+    name = models.CharField(max_length=200)
+    slug = models.SlugField(max_length=220, unique=True, blank=True)
+    description = models.TextField(blank=True)
+    price = models.DecimalField(max_digits=10, decimal_places=2,
+                                validators=[MinValueValidator(Decimal('0.01'))])
+    stock = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    # image = models.ImageField(...)  ← added in Lesson 3.5
+
+    class Meta:
+        ordering = ['-created_at']           # newest first ("-" = descending)
+        constraints = [
+            models.CheckConstraint(condition=models.Q(price__gt=0), name='product_price_positive'),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
+Questions to think about while reading (we'll check your answers in the next lessons):
+1. Which line creates the category_id column?
+2. What happens in the database if you try to delete a Category that still has products?
+3. Why is is_active better than deleting a product that has already been ordered?
+
+---
+
+▶️ Your turn (PowerShell)
+
+Step 1: Create the app yourself
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py startapp catalog
+Get-ChildItem catalog
+Expected: migrations\, __init__.py, admin.py, apps.py, models.py, tests.py, views.py. It's the same structure as accounts.
+
+Step 2: Register the app (your first manual settings edit)
+
+Open backend\config\settings.py, find INSTALLED_APPS, and add 'catalog', under our accounts line:
+    # Our apps
+    'accounts',
+    'catalog',
+]
+Watch out for the comma and the quotes. A missing comma between two strings is a classic Python bug: 'accounts' 'catalog' silently becomes 'accountscatalog'. That's a mistake worth knowing about.
+
+Step 3: Verify
+
+uv run python manage.py check
+uv run python manage.py shell -c "from django.apps import apps; print([a.label for a in apps.get_app_configs()])"
+- check → System check identified no issues (0 silenced).
+- The second command lists every installed app's label. You should see 'accounts' and 'catalog' at the end.
+1. Which line creates the category_id column?
+2. What happens in the database if you try to delete a Category that still has products?
+3. Why is is_active better than deleting a product that has already been ordered?
+
+---
+
+▶️ Your turn (PowerShell)
+
+Step 1: Create the app yourself
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py startapp catalog
+Get-ChildItem catalog
+Expected: migrations\, __init__.py, admin.py, apps.py, models.py, tests.py, views.py. It's the same structure as accounts.
+
+Step 2: Register the app (your first manual settings edit)
+
+Open backend\config\settings.py, find INSTALLED_APPS, and add 'catalog', under our accounts line:
+    # Our apps
+    'accounts',
+    'catalog',
+]
+Watch out for the comma and the quotes. A missing comma between two strings is a classic Python bug: 'accounts' 'catalog' silently becomes 'accountscatalog'. That's a mistake worth knowing about.
+
+Step 3: Verify
+
+uv run python manage.py check
+uv run python manage.py shell -c "from django.apps import apps; print([a.label for a in apps.get_app_configs()])"
+- check → System check identified no issues (0 silenced).
+- The second command lists every installed app's label. You should see 'accounts' and 'catalog' at the end.
+
+Don't commit yet. We'll commit the app together with its models in the next lesson.
+
+
+
+What & why
+
+You approved the design in Lesson 3.1. Now I've written it into catalog/models.py, and you'll turn it into real Postgres tables: generate the migration, read its SQL, apply it, and prove the database enforces our rules.
+
+Files involved
+backend/catalog/
+├── models.py                   ← ✏️ WRITTEN: Category + Product (exactly the code from Lesson 3.1, plus comments)
+└── migrations/0001_initial.py  ← YOU generate it with makemigrations
+I verified it (read-only): check → no issues, and makemigrations --dry-run → + Create model Category, + Create model Product.
+
+---
+
+The code parts we haven't explained yet
+
+class Meta: settings about the model, not fields
+
+class Meta:
+    ordering = ['-created_at']      # default ORDER BY for queries: newest first
+    constraints = [...]             # database-level rules
+🧒 Simple: fields are the boxes on the form, while Meta is the printing instructions for the form: how to sort the stack, what to call it in the plural, which rules the filing cabinet itself must enforce.
+🛠️ Developer: Meta holds model options. ordering adds an ORDER BY to queries that don't specify their own order. Remember Lesson 1.4: without ORDER BY, SQL row order isn't guaranteed. verbose_name_plural fixes the admin label ("categories", not "categorys").
+
+Overriding save() and super()
+
+def save(self, *args, **kwargs):
+    if not self.slug:
+        self.slug = slugify(self.name)
+    super().save(*args, **kwargs)
+🧒 Simple: before the clerk files the card, we add one step: "if the nickname box is empty, write one based on the name." Then we hand the card to the normal filing process.
+🛠️ Developer:
+- save() is the method that writes the row (INSERT or UPDATE). We run our own code first.
+- super().save(*args, **kwargs) then calls the parent class's original save, which does the actual database write.
+- *args, **kwargs pass along any options callers gave, like update_fields=[...].
+- Forgetting super().save() is a classic bug: nothing is saved, and there's no error.
+
+__str__
+
+How an object prints in the admin, the shell, and dropdowns. You'll see Blue Mug instead of Product object (1).
+
+---
+
+▶️ Your turn (PowerShell, in backend\)
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+
+Step 1: Read the model file
+
+Open catalog\models.py and compare it with the design in Lesson 3.1. The only additions are comments.
+
+Step 2: Generate the migration
+
+uv run python manage.py makemigrations catalog
+Expected:
+Migrations for 'catalog':
+  catalog\migrations\0001_initial.py
+    + Create model Category
+    + Create model Product
+Open catalog\migrations\0001_initial.py. Find these:
+- ('category', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='products', to='catalog.category'))
+- validators=[django.core.validators.MinValueValidator(Decimal('0.01'))] on price
+- 'constraints': [models.CheckConstraint(condition=models.Q(('price__gt', 0)), name='product_price_positive')] in the options
+- dependencies = []: this app doesn't depend on any other app's migrations yet. (Compare accounts, which depended on auth.)
+
+Step 3: Read the SQL Django will run
+
+uv run python manage.py sqlmigrate catalog 0001
+Find each rule from our model in the SQL:
+
+┌─────────────────────────────────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│            In models.py             │                                                  In the SQL                                                   │
+├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ PositiveIntegerField                │ "stock" integer NOT NULL CHECK ("stock" >= 0). Postgres itself rejects negative stock.                        │
+├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ DecimalField(10, 2)                 │ "price" numeric(10, 2) NOT NULL                                                                               │
+├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ CheckConstraint(price > 0)          │ ADD CONSTRAINT "product_price_positive" CHECK ("price" > 0)                                                   │
+├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ForeignKey(Category)                │ "category_id" bigint NOT NULL + FOREIGN KEY ("category_id") REFERENCES "catalog_category" ("id") DEFERRABLE   │
+│                                     │ INITIALLY DEFERRED                                                                                            │
+├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ (automatic)                         │ CREATE INDEX "catalog_product_category_id_..." ON "catalog_product" ("category_id"). Django indexes every FK  │
+│                                     │ so "products in category X" stays fast.                                                                       │
+├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ unique=True on slug                 │ a UNIQUE constraint + a ..._like index for prefix searches                                                    │
+├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ MinValueValidator(0.01)             │ nothing! Validators live only in Python. That's why we also added the constraint.                             │
+├─────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ordering, related_name,             │ nothing! These are Django-side behaviour too.                                                                 │
+│ on_delete=PROTECT                   │                                                                                                               │
+└─────────────────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+A surprising detail: the FK's SQL has no ON DELETE PROTECT. Django implements on_delete in Python. Before deleting a category it looks for related products and raises ProtectedError. The database FK is still a safety net: its default behaviour refuses to delete a row that others still reference, checked at COMMIT because of DEFERRABLE INITIALLY DEFERRED.
+
+Step 4: Apply it
+
+uv run python manage.py migrate
+uv run python manage.py showmigrations catalog
+Expected: Applying catalog.0001_initial... OK, then [X] 0001_initial.
+
+Step 5: Prove the database guards the data
+
+Open psql:
+docker compose exec db psql -U shoplite -d shoplite
+Look at the table:
+\d catalog_product
+At the bottom, find the Check constraints: section (product_price_positive, catalog_product_stock_check) and Foreign-key constraints:.
+
+Now try to break the rules on purpose with raw SQL, bypassing Django completely:
+INSERT INTO catalog_category (name, slug, description, created_at, updated_at)
+VALUES ('Test', 'test', '', now(), now());
+
+INSERT INTO catalog_product (category_id, name, slug, description, price, stock, is_active, created_at, updated_at)
+VALUES ((SELECT id FROM catalog_category WHERE slug = 'test'), 'Free thing', 'free-thing', '', 0, 5, true, now(), now());
+
+INSERT INTO catalog_product (category_id, name, slug, description, price, stock, is_active, created_at, updated_at)
+VALUES ((SELECT id FROM catalog_category WHERE slug = 'test'), 'Negative stock', 'negative-stock', '', 9.99, -1, true, now(), now());
+
+INSERT INTO catalog_product (category_id, name, slug, description, price, stock, is_active, created_at, updated_at)
+VALUES (999999, 'Orphan', 'orphan', '', 9.99, 1, true, now(), now());
+Expected, one error each:
+1. The category insert → INSERT 0 1 ✅
+2. Price 0 → ERROR: new row for relation "catalog_product" violates check constraint "product_price_positive"
+3. Stock −1 → ERROR: ... violates check constraint "catalog_product_stock_check"
+4. A category that doesn't exist → ERROR: insert or update on table "catalog_product" violates foreign key constraint ...
+
+Each rule is enforced by PostgreSQL itself, not just by Django. That's the "locked safe" from Lesson 3.1, Concept 5.
+
+Clean up the test category, check it's gone, and leave:
+DELETE FROM catalog_category WHERE slug = 'test';
+SELECT count(*) FROM catalog_category;
+SELECT count(*) FROM catalog_product;
+\q
+Both counts should be 0.
