@@ -1,11 +1,13 @@
-from django.urls import path
+from rest_framework.routers import DefaultRouter
 
 from . import views
 
+# The router generates the URL patterns for each ViewSet:
+#   categories/  categories/<slug>/  products/  products/<slug>/
+# DefaultRouter also adds an API overview page at the root (/api/).
+router = DefaultRouter()
+router.register('categories', views.CategoryViewSet)
+router.register('products', views.ProductViewSet)
+
 # These are included under "api/" in config/urls.py.
-urlpatterns = [
-    path('categories/', views.CategoryListView.as_view(), name='category-list'),
-    path('categories/<slug:slug>/', views.CategoryDetailView.as_view(), name='category-detail'),
-    path('products/', views.ProductListView.as_view(), name='product-list'),
-    path('products/<slug:slug>/', views.ProductDetailView.as_view(), name='product-detail'),
-]
+urlpatterns = router.urls

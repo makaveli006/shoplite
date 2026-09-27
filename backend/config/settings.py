@@ -117,6 +117,24 @@ DATABASES = {
 AUTH_USER_MODEL = 'accounts.User'
 
 
+# Django REST Framework
+REST_FRAMEWORK = {
+    # How DRF finds out WHO is making the request.
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        # The browser session (after logging in to /admin/ or /api-auth/login/).
+        'rest_framework.authentication.SessionAuthentication',
+        # Email + password sent with every request. TEMPORARY, for testing from
+        # PowerShell until JWT authentication replaces it in Phase 5.
+        'rest_framework.authentication.BasicAuthentication',
+    ],
+    # Secure default: every endpoint requires a logged-in user unless the view
+    # says otherwise (our catalog views use IsAdminOrReadOnly).
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
+
+
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
 

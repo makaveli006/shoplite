@@ -2725,3 +2725,390 @@ Not Found: /api/products/discontinued-travel-mug/
 Method Not Allowed (POST): /api/products/
 "POST /api/products/ HTTP/1.1" 405 ...
 These are the same HTTP status codes from Lesson 0.1, now produced by your own API.
+
+
+
+
+What & why
+
+Our product JSON currently says "category": 2. The React app would need a second request to learn that 2 means "Kitchen." Today we improve the serializers:
+1. Nested reads: "category": {"id": 2, "name": "Kitchen", "slug": "kitchen"}
+2. Simple writes: clients send "category_id": 2 when creating or editing a product (used from Lesson 4.3)
+3. A computed field: "in_stock": true/false
+4. Custom validation with clear 400 messages instead of crashes
+5. A new /api/categories/ endpoint, needed for the shop's category filter
+
+Files involved (written and verified)
+backend/catalog/
+├── serializers.py   ← ✏️ CategorySerializer, CategorySummarySerializer, improved ProductSerializer
+├── views.py         ← ✏️ + CategoryListView, CategoryDetailView
+└── urls.py          ← ✏️ + categories/ and categories/<slug>/
+
+---
+
+Concept 1: Nested serializers (reading related objects)
+
+🧒 Simple: Instead of a delivery note that says "shelf #2," the box now includes a small label: "Shelf #2: Kitchen (kitchen)." The receiver doesn't need to phone the warehouse to ask what shelf #2 is.
+
+🛠️ Developer: A serializer can be used as a field inside another serializer:
+category = CategorySummarySerializer(read_only=True)
+DRF serializes product.category with that smaller serializer. Because the view uses .select_related('category'), all the categories arrive in the same SQL query. I measured it: 1 query for all 20 products, including the nested categories. Without select_related it would be 21 (the N+1 problem from Lesson 3.6).
+
+Why two category serializers?
+- CategorySerializer (id, name, slug, description) is used by /api/categories/.
+- CategorySummarySerializer (id, name, slug) is used inside each product, so we don't repeat long descriptions in every product.
+
+Concept 2: Different shapes for reading and writing
+
+🧒 Simple: When the warehouse sends you a product, the label is detailed ("Kitchen"). When you order a change, you only need to write the shelf number ("2"), because the warehouse already knows its shelves.
+
+🛠️ Developer: Two fields, each only used in one direction:
+category = CategorySummarySerializer(read_only=True)       # appears in responses only
+category_id = serializers.PrimaryKeyRelatedField(
+    source='category',                  # writing category_id sets product.category
+    queryset=Category.objects.all(),    # the id must exist in this queryset
+    write_only=True,                    # never appears in responses
+)
+- read_only=True: ignored if a client sends it.
+- write_only=True: accepted as input but never output.
+- source='category' maps the JSON name category_id to the model attribute category. DRF looks up the Category and validates that it exists (Invalid pk "999" - object does not exist.).
+
+This read-nested / write-by-id pattern is one of the most common in real APIs.
+
+Concept 3: Computed fields (SerializerMethodField)
+
+🧒 Simple: A sticker the packing clerk adds to each box, based on what's inside: "✅ In stock" or "❌ Sold out." It's not stored anywhere. It's worked out while packing.
+
+🛠️ Developer: in_stock = serializers.SerializerMethodField() is read-only, and DRF calls get_in_stock(self, obj) to produce its value. It's handy for derived values the UI needs (badges, flags). The logic lives on the server, so React doesn't have to reimplement "what counts as in stock."
+
+Concept 4: Validation layers in a serializer
+
+🧒 Simple: Incoming boxes pass three checkpoints:
+1. Each item alone: is the price a number? Is it at least 0.01?
+2. Custom rules per item (optional)
+3. The whole box together: "the name you chose would clash with an existing product's web address."
+
+Only a box that passes all three gets into the warehouse. Otherwise the sender gets a list of everything wrong at once.
+
+🛠️ Developer: serializer.is_valid() runs, in order:
+1. Field validation: types, max_length, required, min_value. ModelSerializer copies these from the model, including our MinValueValidator(0.01), PositiveIntegerField's >= 0, and UniqueValidator for unique fields.
+2. validate_<field>(self, value) methods, if defined (per-field custom rules).
+3. validate(self, attrs): object-level rules that need several fields at once.
+
+Errors are collected into serializer.errors, a dict of field → messages. In a view that becomes a 400 Bad Request response with that dict as JSON.
+
+The bug our validate() prevents:
+- Our model fills an empty slug from the name inside save().
+- If someone creates "Chef Knife" again through the API without a slug, DRF's automatic UniqueValidator has nothing to check (the slug is empty). Then save() generates chef-knife, and Postgres rejects the duplicate → IntegrityError → an ugly 500 Internal Server Error.
+- Our validate() generates the slug early and checks it, so the client gets a clear 400 instead.
+
+Rule of thumb: anything the client can get wrong should be a 400 with a message, never a 500.
+
+---
+
+The code, explained (catalog/serializers.py, key parts)
+
+class ProductSerializer(serializers.ModelSerializer):
+    category = CategorySummarySerializer(read_only=True)
+    category_id = serializers.PrimaryKeyRelatedField(
+        source='category', queryset=Category.objects.all(), write_only=True)
+    in_stock = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Product
+        fields = ['id', 'name', 'slug', 'description', 'price', 'stock', 'in_stock',
+                  'image', 'is_active', 'category', 'category_id', 'created_at', 'updated_at']
+
+    def get_in_stock(self, obj):             # "get_" + field name
+        return obj.stock > 0
+
+    def validate(self, attrs):               # attrs = already field-validated data
+        if self.instance is None and not attrs.get('slug'):   # only when CREATING without a slug
+            slug = slugify(attrs['name'])
+            if not slug:                                        # e.g. name "!!!" → slug ""
+                raise serializers.ValidationError({'name': 'The name must contain at least one letter or digit.'})
+            if Product.objects.filter(slug=slug).exists():
+                raise serializers.ValidationError({'slug': f'A product with the slug "{slug}" already exists. ...'})
+            attrs['slug'] = slug
+        return attrs                         # must return the (possibly modified) data
+- self.instance is None when creating, and the existing product when updating.
+- Raising ValidationError({'field': 'message'}) attaches the error to a specific field, so the React form can show it under the right input.
+
+---
+
+▶️ Your turn
+
+Window 1:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py runserver
+
+Step 1: See the new JSON shape
+
+Window 2:
+(Invoke-RestMethod http://127.0.0.1:8000/api/products/) | Select-Object name, price, stock, in_stock, @{n='category'; e={$_.category.name}} | Format-Table
+- Parentheses: the PowerShell 5.1 fix.
+- @{n='category'; e={$_.category.name}} is a calculated column that reaches into the nested object.
+
+You'll see Linen Cushion Cover with in_stock = False.
+
+In the browser, open http://127.0.0.1:8000/api/products/chef-knife/. Notice that category is now an object and category_id is not shown, because it's write-only.
+
+Step 2: The categories endpoint
+
+(Invoke-RestMethod http://127.0.0.1:8000/api/categories/) | Format-Table
+Invoke-RestMethod http://127.0.0.1:8000/api/categories/kitchen/
+Five categories, sorted by name (Meta.ordering).
+
+Step 3: Test validation directly in the shell
+
+There's no create endpoint yet (that's Lesson 4.3), but a serializer can be tested on its own. That's one of the nice things about keeping validation in serializers. is_valid() doesn't write anything to the database.
+
+Stop the server (Ctrl+C) or use Window 2:
+uv run python manage.py shell
+from catalog.serializers import ProductSerializer
+
+s = ProductSerializer(data={'name': 'Chef Knife', 'price': '0', 'stock': -1, 'category_id': 999})
+s.is_valid()
+s.errors
+→ False, and three errors at once:
+- price: Ensure this value is greater than or equal to 0.01.
+- stock: Ensure this value is greater than or equal to 0.
+- category_id: Invalid pk "999" - object does not exist.
+
+s = ProductSerializer(data={'name': 'Chef Knife', 'price': '10.00', 'stock': 1, 'category_id': 2})
+s.is_valid()
+s.errors
+→ False, {'slug': ['A product with the slug "chef-knife" already exists. ...']}. The fields were fine individually, so our object-level validate() caught the clash.
+
+s = ProductSerializer(data={'name': '!!!', 'price': '10.00', 'stock': 1, 'category_id': 2})
+s.is_valid()
+s.errors
+→ {'name': ['The name must contain at least one letter or digit.']}
+
+s = ProductSerializer(data={'name': 'Brand New Teapot', 'price': '25.00', 'stock': 4, 'category_id': 2})
+s.is_valid()
+s.validated_data
+exit()
+→ True, and validated_data contains Python values ready for the database: 'price': Decimal('25.00'), 'category': <Category: Kitchen>, 'slug': 'brand-new-teapot'. The string "25.00" became a Decimal, the id 2 became a Category object, and the slug was filled in. Nothing is saved until .save() is called, which views will do in Lesson 4.3.
+
+Step 4 (optional): Count the queries yourself
+
+uv run python manage.py shell -c "from django.test import Client; from django.db import connection, reset_queries; c = Client(HTTP_HOST='localhost', HTTP_ACCEPT='application/json'); reset_queries(); r = c.get('/api/products/'); print(r.status_code, len(r.json()), 'products,', len(connection.queries), 'SQL query')"
+→ 200 20 products, 1 SQL query. Try temporarily removing .select_related('category') from ProductListView and run it again: 21 queries. Then put it back.
+
+Step 5: Commit
+
+cd ..
+git add backend/catalog'brand-new-teapot'. The string "25.00" became a Decimal, the id 2 became a Category object, and the slug was filled in. Nothing is saved until .save() is called, which views will do in Lesson 4.3.
+
+Step 4 (optional): Count the queries yourself
+
+uv run python manage.py shell -c "from django.test import Client; from django.db import connection, reset_queries; c = Client(HTTP_HOST='localhost', HTTP_ACCEPT='application/json'); reset_queries(); r = c.get('/api/products/'); print(r.status_code, len(r.json()), 'products,', len(connection.queries), 'SQL query')"
+→ 200 20 products, 1 SQL query. Try temporarily removing .select_related('category') from ProductListView and run it again: 21 queries. Then put it back.
+
+
+
+What & why
+
+Our API can only read. The shop's administrators need to create, update, and delete products and categories through the API too (the React admin screens in Phase 14 will use these endpoints). Today:
+1. Replace the four read-only views with two ViewSets that support full CRUD
+2. Let a Router generate all the URLs
+3. Add a permission: anyone can read, only staff can write
+4. Make DRF deny by default (every endpoint requires login unless a view says otherwise)
+5. Turn the "category still has products" crash into a clear 409 Conflict
+
+Files involved (written, and verified in a rolled-back test, so nothing was saved)
+backend/
+├── core/                        ← NEW Python package for code shared by all apps
+│   ├── __init__.py
+│   └── permissions.py           ←   IsAdminOrReadOnly
+├── catalog/views.py             ← ✏️ CategoryViewSet, ProductViewSet (replace the 4 views)
+├── catalog/urls.py              ← ✏️ DefaultRouter generates the URLs
+├── config/urls.py               ← ✏️ + api-auth/ (login link for the browsable API)
+└── config/settings.py           ← ✏️ REST_FRAMEWORK: authentication + permission defaults
+core is a plain Python package, not a Django app. It has no models, admin, or migrations, so it doesn't need startapp or INSTALLED_APPS. Any code can import from it: from core.permissions import IsAdminOrReadOnly.
+
+---
+
+Concept 1: ViewSets (one class, many actions)
+
+🧒 Simple: Before, we had separate clerks: one who hands out the product list and one who hands out single products. A ViewSet is one experienced clerk who handles every request about products: listing, showing one, adding, changing, removing. You just tell them which shelf, which checklist, and who's allowed to do what.
+
+🛠️ Developer: ModelViewSet combines mixins that implement actions, not HTTP methods:
+
+┌────────────────┬────────┬───────────────────────┬────────────────┐
+│     Action     │  HTTP  │          URL          │ Success status │
+├────────────────┼────────┼───────────────────────┼────────────────┤
+│ list           │ GET    │ /api/products/        │ 200            │
+├────────────────┼────────┼───────────────────────┼────────────────┤
+│ create         │ POST   │ /api/products/        │ 201 Create
+├────────────────┼────────┼───────────────────────┼────────────────┤
+│ retrieve       │ GET    │ /api/products/<slug>/ │ 200            │
+├────────────────┼────────┼───────────────────────┼────────────────┤
+│ update         │ PUT    │ /api/products/<slug>/ │ 200
+├────────────────┼────────┼───────────────────────┼────────────────┤
+│ partial_update │ PATCH  │ /api/products/<slug>/ │ 200            │
+├────────────────┼────────┼───────────────────────┼────────────────┤
+│ destroy        │ DELETE │ /api/products/<slug>/ │ 204 No Content │
+└────────────────┴────────┴───────────────────────┴────────────────┘
+
+Each action uses the same get_queryset(), serializer_class, and permission_classes. So create runs serializer.is_valid() (our validation from Lesson 4.2) and then serializer.save(), and a failed validation automatically becomes a 400 with serializer.errors as JSON.
+
+PUT vs. PATCH:
+- PUT = "replace the whole thing." Every required field must be sent, otherwise 400.
+- PATCH = "change only these fields."
+- The React app will mostly use PATCH.
+
+Concept 2: Routers (URLs generated for you)
+
+🧒 Simple: Instead of painting every door sign by hand, you tell the sign-maker "this corridor is products," and it produces all the standard signs (list
+door, item door) consistently.
+
+🛠️ Developer: router.register('products', ProductViewSet) generates:
+- products/ → {get: list, post: create}
+- products/<slug>/ → {get: retrieve, put: update, patch: parti
+
+The URL names are product-list and product-detail, derived from the queryset's model. DefaultRouter also adds an API root at /api/ that links to every registered resource.
+
+Concept 3: Authentication vs. permissions (who are you? / what may you do?)
+
+🧒 Simple: At the staff entrance, the ID check (authentication) asks who are you?, and the access list (permission) asks are you allowed in here? A customer with a valid ID is still turned away from the stockroom.
+
+🛠️ Developer: For every request DRF runs, in order:
+1. Authentication classes (DEFAULT_AUTHENTICATION_CLASSES) try to identify the user and set request.user. Nobody identified → AnonymousUser.
+   - SessionAuthentication: the browser's login cookie (after logging in to /admin/ or /api-auth/login/)
+   - BasicAuthentication: Authorization: Basic base64(email:password) on every request. Temporary, only so you can test from PowerShell. Phase 5 replaces it with JWT.
+2. Permission classes decide yes or no with has_permission(request, view):
+   - Globally (DEFAULT_PERMISSION_CLASSES = [IsAuthenticated]): deny by default. Any endpoint we forget to configure requires login instead of being wide open.
+   - Per view (permission_classes = [IsAdminOrReadOnly]): overrides the default for the catalog.
+3. On failure you get 403 Forbidden. (With session authenticatswers 403 for "not logged in at all". With JWT in Phase 5 that
+   becomes 401 Unauthorized, and I'll explain the difference t
+
+Our permission:
+class IsAdminOrReadOnly(BasePermission):
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:          # ('GET', 'HEAD', 'OPTIONS'): reading
+            return True
+        return bool(request.user and request.user.is_staff)   # writing: staff only
+
+Concept 4: The same data looks different to different users
+
+🧒 Simple: Customers only see goods on the shop floor. Staff can also see what's in the back room (hidden items), so they can fix and restore them.
+
+🛠️ Developer:
+def get_queryset(self):
+    queryset = super().get_queryset()
+    if self.request.user.is_staff:
+        return queryset                        # all products
+    return queryset.filter(is_active=True)    # only visible ones
+get_queryset() runs per request, so it can depend on who's asking. Because retrieve, update, and destroy also use it, a customer asking for a hidden product gets 404, not 403. The API doesn't even reveal that the product exists.
+
+Concept 5: Turning crashes into meaningful status codes
+
+🧒 Simple: If you ask to remove a shelf that still has goods on it, the clerk should say "please empty it first," not faint.
+
+🛠️ Developer: on_delete=PROTECT raises ProtectedError. Uncaught, that's a 500 Internal Server Error. We catch it in destroy() and return 409 Conflict, which is the HTTP status for "the request conflicts with the current state of the resource."
+
+---
+
+Status codes you'll see today
+
+┌─────────────────┬──────────────────────────────┬───────────────────────────────────────┐
+│      Code       │           Meaning            │
+├─────────────────┼──────────────────────────────┼───────────────────────────────────────┤
+│ 200 OK          │ success with a body          │ GET, PUT, PATCH                       │
+├─────────────────┼──────────────────────────────┼───────────────────────────────────────┤
+│ 201 Created     │ a new resource was created   │ POST                                  │
+├─────────────────┼──────────────────────────────┼───────────────────────────────────────┤
+│ 204 No Content  │ success, nothing to return   │ DELETE
+├─────────────────┼──────────────────────────────┼───────────────────────────────────────┤
+│ 400 Bad Request │ invalid data                 │ validation errors, incomplete PUT     │
+├─────────────────┼──────────────────────────────┼────────────
+│ 403 Forbidden   │ not logged in / not allowed  │ anonymous or customer writing         │
+├─────────────────┼──────────────────────────────┼────────────
+│ 404 Not Found   │ doesn't exist for you        │ hidden product as a customer          │
+├─────────────────┼──────────────────────────────┼───────────────────────────────────────┤
+│ 409 Conflict    │ conflicts with current state │ deleting a category that has products │
+└─────────────────┴──────────────────────────────┴───────────────────────────────────────┘
+
+---
+
+▶️ Your turn
+
+Window 1:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py check
+uv run python manage.py runserver
+
+Step 1: Deny by default, in the browser
+
+Open http://127.0.0.1:8000/api/ in a private/incognito window (so you're not logged in from the admin).
+→ 403 "Authentication credentials were not provided." The router's API root has no permission_classes of its own, so it inherited our global IsAuthenticated. That's deny by default working.
+
+Now open http://127.0.0.1:8000/api/products/. It's public (IsAdminOrReadOnly allows GET), and there's no form at the bottom, because anonymous users can't POST.
+
+Click Log in (top right), log in with your admin email, and look again:
+- http://127.0.0.1:8000/api/ now lists categories and products.
+- http://127.0.0.1:8000/api/products/ now has a form at the bottom (HTML form / Raw data) for creating products. The browsable API only shows what you are allowed to do.
+- http://127.0.0.1:8000/api/products/discontinued-travel-mug/ → 200 for you as staff (it's 404 in the private window).
+
+Step 2: Prepare PowerShell for authenticated requests
+
+Window 2. Put your real passwords in place of the placeholders:
+$admin    = "subin@ontash.net:YOUR_ADMIN_PASSWORD"
+$customer = "customer@example.com:YOUR_CUSTOMER_PASSWORD"
+$api      = "http://127.0.0.1:8000/api"
+
+@{ name = 'Brand New Teapot'; price = '25.00'; stock = 4; category_id = 2 } | ConvertTo-Json | Set-Content -Encoding ascii "$env:TEMP\teapot.json"
+@{ price = '19.99' } | ConvertTo-Json | Set-Content -Encoding
+Get-Content "$env:TEMP\teapot.json"
+- curl.exe -u "email:password" sends Basic authentication.
+- We write the JSON bodies to files and send them with --data-binary "@file", because Windows PowerShell 5.1 mangles double quotes inside arguments passed to programs like curl.exe. Files avoid that problem entirely.
+- ⚠️ Passwords typed like this end up in your PowerShell histo own dev machine with dev passwords, and it's one reason Basicauth is temporary.
+
+Step 3: The permission matrix
+
+Each command prints the status line first. Read it before the body.
+
+(a) Anonymous create → 403
+curl.exe -i -X POST -H "Content-Type: application/json" --data-binary "@$env:TEMP\teapot.json" "$api/products/"
+→ 403 Forbidden {"detail":"Authentication credentials were not provided."}
+
+(b) Customer create → 403
+curl.exe -i -u $customer -X POST -H "Content-Type: application/json" --data-binary "@$env:TEMP\teapot.json" "$api/products/"
+→ 403 Forbidden {"detail":"You do not have permission to perform this action."}. The customer was identified, but isn't allowed. Compare the two messages.
+
+(c) Admin create → 201
+curl.exe -i -u $admin -X POST -H "Content-Type: application/json" --data-binary "@$env:TEMP\teapot.json" "$api/products/"
+→ 201 Created, with the new product in the body: "slug":"brand-new-teapot" (from our validate()) and "category":{"id":2,"name":"Kitchen",...}.
+
+(d) Same request again → 400
+curl.exe -i -u $admin -X POST -H "Content-Type: application/json" --data-binary "@$env:TEMP\teapot.json" "$api/products/"
+→ 400 Bad Request {"slug":["A product with the slug \"brand-ne."]}
+
+(e) Update one field with PATCH → 200
+curl.exe -i -u $admin -X PATCH -H "Content-Type: application/json" --data-binary "@$env:TEMP\patch.json" "$api/products/brand-new-teapot/"
+→ 200 OK, "price":"19.99", and updated_at changed.
+
+(f) PUT with only one field → 400
+curl.exe -i -u $admin -X PUT -H "Content-Type: application/json" --data-binary "@$env:TEMP\patch.json" "$api/products/brand-new-teapot/"
+→ 400 listing the required fields that are missing (name, category_id). That's PUT's "replace everything" rule.
+
+(g) Delete a category that has products → 409
+curl.exe -i -u $admin -X DELETE "$api/categories/kitchen/"
+→ 409 Conflict {"detail":"This category still has products. Move or delete them first."}
+
+(h) Delete the teapot → 204, then → 404
+curl.exe -i -u $admin -X DELETE "$api/products/brand-new-teapot/"
+curl.exe -i "$api/products/brand-new-teapot/"
+→ 204 No Content (empty body), then 404 Not Found.
+
+(i) Hidden product: anonymous vs. admin
+curl.exe -s -o NUL -w "anonymous: %{http_code}`n" "$api/products/discontinued-travel-mug/"
+curl.exe -s -o NUL -w "admin:     %{http_code}`n" -u $admin "$api/products/discontinued-travel-mug/"
+→ anonymous: 404, admin: 200. The same URL gives a different answer for a different user (get_queryset).
+(-s = silent, -o NUL = discard the body, -w = print just the s
+
+Step 4: Read the server log (Window 1)
+
+You'll see Django logging each non-2xx response with its reason: Forbidden: /api/products/, Bad Request: /api/products/, Conflict: /api/categories/kitchen/, Not Found: /api/products/brand-new-teapot/. It's a handy one-line summary of what went wrong.

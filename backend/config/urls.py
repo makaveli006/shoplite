@@ -27,6 +27,8 @@ admin.site.index_title = 'Store management'
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('catalog.urls')),
+    # "Log in" / "Log out" links for the browsable API (session login, development only).
+    path('api-auth/', include('rest_framework.urls')),
 ]
 
 # In development, let runserver serve uploaded files from MEDIA_ROOT.
