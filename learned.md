@@ -2322,3 +2322,206 @@ Step 6: See the database side
 
 docker compose exec db psql -U shoplite -d shoplite -c "SELECT id, name, image FROM catalog_product ORDER BY id;"
 The image column contains only paths like products/2026/09/mug.jpg. The image bytes live in backend\media\.
+
+
+
+What & why
+
+Everything so far went through the admin. But all our future code, from API views to the cart and checkout, talks to the database through the ORM in Python. Today you practise the ORM directly in the Django shell, learn to see the SQL it generates, and write a management command (seed_catalog) that fills the database with 21 sample products. We'll need that data for search, filtering, and pagination in Phase 4.
+
+Files involved
+backend/catalog/management/
+├── __init__.py                 ← NEW (empty): makes "management" a Python package
+└── commands/
+    ├── __init__.py             ← NEW (empty)
+    └── seed_catalog.py         ← NEW: `manage.py seed_catalog`
+Django discovers commands by this exact folder structure: <app>/management/commands/<name>.py becomes manage.py <name>. I verified that manage.py help seed_catalog finds it and that all 21 product slugs are unique. I did not run it; you do that.
+
+---
+
+Concept 1: The ORM, QuerySets, and laziness
+
+🧒 Simple: Instead of writing SQL letters to the database, you speak Python: "Products, please, cheaper than 20, sorted by price." The ORM translates. And it's lazy, like writing a shopping list without going to the shop. The trip happens only when you actually need the items (loop over them, print them, count them).
+
+🛠️ Developer:
+- Product.objects is the model's Manager. .all(), .filter(), .exclude(), and .order_by() return a QuerySet, a description of a query, not results.
+- QuerySets are chainable and lazy: Product.objects.filter(...).order_by(...) runs no SQL until it's evaluated by iteration, list(), slicing with a step, len(), bool(), or printing.
+- Some methods hit the database immediately:
+  - .get(), .count(), .exists(), .first()
+  - .create(), .update(), .delete(), .aggregate()
+- str(qs.query) shows the SQL a QuerySet would run. It's great for learning and debugging.
+
+Field lookups use double underscores:
+
+┌──────────────────────────┬────────────────────────────────────┐
+│          Lookup          │              Meaning               │
+├──────────────────────────┼────────────────────────────────────┤
+│ price__lt=20             │ price < 20                         │
+├──────────────────────────┼────────────────────────────────────┤
+│ name__icontains='mug'    │ case-insensitive ILIKE '%mug%'     │
+├──────────────────────────┼────────────────────────────────────┤
+│ id__in=[6, 7]            │ IN (6, 7)                          │
+├──────────────────────────┼────────────────────────────────────┤
+│ category__slug='kitchen' │ follows the ForeignKey with a JOIN │
+└──────────────────────────┴────────────────────────────────────┘
+
+Concept 2: The ways to change data (and their side effects)
+
+🧒 Simple: There's editing one card carefully (the clerk checks everything and stamps the time), and there's one instruction for the whole drawer ("add 5 to every stock count"): fast, but no per-card stamping.
+
+🛠️ Developer:
+
+┌─────────────────────────────────┬──────────────────────────────────────────────────────────┬──────────────────────────┐
+│              Code               │                           SQL                            │      Calls save()?       │
+├─────────────────────────────────┼──────────────────────────────────────────────────────────┼──────────────────────────┤
+│ Product.objects.create(...)     │ one INSERT                                               │ ✅ (our slug logic runs) │
+├─────────────────────────────────┼──────────────────────────────────────────────────────────┼──────────────────────────┤
+│ p.price = ...; p.save()         │ UPDATE all columns of that row                           │ ✅                       │
+├─────────────────────────────────┼──────────────────────────────────────────────────────────┼──────────────────────────┤
+│ p.save(update_fields=['price']) │ UPDATE only price (add updated_at if you want it bumped) │ ✅                       │
+├─────────────────────────────────┼──────────────────────────────────────────────────────────┼──────────────────────────┤
+│ qs.update(stock=F('stock') + 5) │ one UPDATE ... SET stock = stock + 5                     │ ❌                       │
+├─────────────────────────────────┼──────────────────────────────────────────────────────────┼──────────────────────────┤
+│ p.delete() / qs.delete()        │ DELETE (plus on_delete handling)                         │ ❌ (it calls delete())   │
+└─────────────────────────────────┴──────────────────────────────────────────────────────────┴──────────────────────────┘
+
+F('stock') means "the value currently in the database column," so the maths happens inside Postgres. Compare:
+- p.stock = p.stock - 1; p.save() reads a value into Python and writes it back. Two customers doing that at the same moment can both read 5 and both write 4, losing a sale. That's a race condition.
+- F('stock') - 1 is atomic in the database. We'll rely on this idea at checkout in Phase 7.
+
+Concept 3: Management commands, and "idempotent" seeding
+
+🧒 Simple: A management command is a custom button on the control panel. Ours is "stock the demo shop." It's idempotent: pressing it twice doesn't create duplicate products. The second press just refreshes what's already there, like a "reset to showroom" button.
+
+🛠️ Developer:
+- A command is a BaseCommand subclass with handle(). self.stdout.write(self.style.SUCCESS(...)) prints green text.
+- update_or_create(slug=..., defaults={...}) does a SELECT by slug, then an UPDATE if found or an INSERT if not. It returns (obj, created).
+- Fields not in defaults (like image) are left alone, so your uploaded photos survive re-seeding.
+- @transaction.atomic wraps the whole run in one database transaction: all 21 products are saved, or (if anything fails) none are.
+- Prices are built with Decimal('12.50') from strings, never floats.
+- ⚠️ Seeding resets price/stock/description of the 4 products you made in the admin to the seed values. That's expected.
+
+---
+
+▶️ Your turn, Part A: the Django shell (on your 4 products)
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py shell
+You're now in a Python prompt >>> with Django loaded. (Django 5.1's shell doesn't auto-import models, so we import them.) Type the lines one at a time and read each result.
+
+1. Imports
+from decimal import Decimal
+from django.db.models import F, Count, Sum, Avg
+from catalog.models import Category, Product
+
+2. Read: laziness and SQL
+qs = Product.objects.filter(price__lt=20).order_by('price')
+print(qs.query)
+qs
+qs.count()
+- print(qs.query) shows SELECT ... WHERE "catalog_product"."price" < 20 ORDER BY "catalog_product"."price" ASC, and no SQL has run yet.
+- Typing qs evaluates it: <QuerySet [<Product: Gel Pen Set>, <Product: Blue Ceramic Mug>, ...]>. Those names come from __str__.
+
+3. Following a relationship (JOIN)
+print(Product.objects.filter(category__slug='kitchen').query)
+Product.objects.filter(category__slug='kitchen')
+kitchen = Category.objects.get(slug='kitchen')
+kitchen.products.all()
+kitchen.products.count()
+In the first query, look for INNER JOIN "catalog_category". kitchen.products works because of related_name='products'.
+
+4. get() and its two errors
+Product.objects.get(slug='chef-knife')
+Product.objects.get(slug='does-not-exist')
+Product.objects.get(category__slug='kitchen')
+- The first returns exactly one object.
+- The second → DoesNotExist: Product matching query does not exist.
+- The third → MultipleObjectsReturned: get() returned more than one Product -- it returned 2!
+
+get() means "exactly one, otherwise it's an error." In the API we'll turn DoesNotExist into a 404.
+
+5. Decimal vs. float
+0.1 + 0.2
+Decimal('0.1') + Decimal('0.2')
+Decimal(0.1)
+mug = Product.objects.get(slug='blue-ceramic-mug')
+mug.price, type(mug.price)
+mug.price * 3
+- 0.30000000000000004 vs. Decimal('0.3')
+- Decimal(0.1) shows the float's hidden blur: 0.1000000000000000055511151231257827.... That's why we always build Decimals from strings.
+- The price comes back from Postgres as a Decimal, so maths stays exact: Decimal('37.50').
+
+6. Create
+books = Category.objects.create(name='Test Books')
+books.slug
+p = Product.objects.create(category=books, name='Test Novel', price=Decimal('9.99'), stock=3)
+p.id, p.slug, p.created_at
+The slugs test-books and test-novel were filled by our save() override. p.id comes from the sequence (ID gaps, remember).
+
+7. Update: single object vs. bulk + F()
+p.price = Decimal('11.49')
+p.save(update_fields=['price', 'updated_at'])
+Product.objects.filter(category=books).update(stock=F('stock') + 10)
+p.stock
+p.refresh_from_db()
+p.stock
+- update() returns how many rows changed (1).
+- p.stock still says 3 after the update! The Python object is a snapshot from when it was loaded, and update() changed the database, not your object. refresh_from_db() reloads it → 13. Remember this: objects in memory don't auto-refresh.
+
+8. Aggregation
+Product.objects.aggregate(total_items=Sum('stock'), avg_price=Avg('price'))
+Category.objects.annotate(n=Count('products')).values_list('name', 'n')
+- aggregate gives one summary dict for the whole table.
+- annotate adds a value per row, the same trick as the admin's product count.
+
+9. Delete, and PROTECT again
+books.delete()
+p.delete()
+books.delete()
+- The first books.delete() → ProtectedError: ("Cannot delete some instances of model 'Category' because they are referenced through protected foreign keys: 'Product.category'.", ...)
+- p.delete() → (1, {'catalog.Product': 1}), which is the number of rows deleted per model.
+- The second books.delete() now succeeds, because nothing references it anymore.
+
+Leave the shell:
+exit()
+
+---
+
+▶️ Your turn, Part B: the seed command
+
+1. Read catalog\management\commands\seed_catalog.py. It's a data dictionary, update_or_create, a counter, and a success message.
+
+2. Run it twice:
+uv run python manage.py seed_catalog
+uv run python manage.py seed_catalog
+Expected:
+Catalog seeded: 5 categories, 17 products created, 4 products updated.
+Catalog seeded: 5 categories, 0 products created, 21 products updated.
+- First run: your 4 existing products were updated (matched by slug), and 17 are new. Your images are still there.
+- Second run: nothing duplicated. That's idempotency.
+
+3. Look at it in the admin (runserver → Products): 21 products, 5 categories, and one hidden product (Discontinued Travel Mug, Active ❌). Linen Cushion Cover has stock 0. We'll use both when testing the API.
+
+---
+
+▶️ Your turn, Part C: see the N+1 problem with your own eyes
+
+uv run python manage.py shell
+from django.db import connection, reset_queries
+from catalog.models import Product
+
+reset_queries()
+names = [(p.name, p.category.name) for p in Product.objects.all()]
+len(connection.queries)
+
+reset_queries()
+names = [(p.name, p.category.name) for p in Product.objects.select_related('category')]
+len(connection.queries)
+print(connection.queries[0]['sql'])
+exit()
+- The first count is 22 queries: 1 for the products and 1 per product for its category.
+- With select_related, it's 1 query, and the printed SQL contains INNER JOIN "catalog_category".
+
+connection.queries only records queries when DEBUG=True. With 21 products the difference is small, but with 10,000 products and real network latency, that's the difference between a fast page and a timeout. Our API views will use select_related from day one.
+
+---
