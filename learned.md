@@ -1426,3 +1426,219 @@ docker compose stop db
 Measure-Command { uv run python manage.py showmigrations 2>$null } | Select-Object TotalSeconds
 docker compose start db
 Measure-Command times the command. You should see a result of roughly 5–10 seconds and then an error, instead of an endless hang. (It can be up to 10 because psycopg tries both ::1 and 127.0.0.1, each with its own 5-second limit.)
+
+
+
+
+
+
+
+
+
+
+
+What & why
+
+Our models exist only as Python classes. The database is still empty (\dt → no tables). Migrations turn model code into real tables. Today we:
+1. generate our first migration file,
+2. read the SQL it will run,
+3. apply all migrations (Django's built-in ones plus ours),
+4. create an administrator account and log in to the admin site.
+
+After this lesson Phase 2 is complete, and you have a working Django + PostgreSQL backend with email login.
+
+Files involved
+backend/accounts/migrations/
+└── 0001_initial.py      ← NEW (you generate it): "create the accounts_user table"
+Plus many tables in Postgres (not files), created by migrate.
+
+How it connects:
+models.py ──makemigrations──▶ migrations/0001_initial.py ──migrate──▶ SQL executed in Postgres
+ (what you WANT)               (a recorded, versioned change)          (what EXISTS)
+                                                                      + a row in django_migrations
+
+---
+
+Concept 1: Migrations
+
+🧒 Simple: Your building's architect doesn't knock down the building every time you want a new room. Each change becomes a numbered work order: "#1: build the customer records room," "#2: add a phone-number cabinet." The builders keep a logbook of which work orders are finished. When a new builder arrives (a teammate's laptop, a production server), they read the logbook and do only the missing work orders, in order.
+
+🛠️ Developer: A migration is a Python file with:
+- dependencies: which migrations must run first. Ours depends on ('auth', '0012_...') because our User links to auth.Group and auth.Permission.
+- operations: database-independent instructions such as CreateModel, AddField, AlterField.
+
+Two commands, two different jobs:
+
+┌────────────────┬─────────────────────────────────────────────────────────────┬────────────────────────────────────────────────────┬────────────────┐
+│    Command     │                        What it reads                        │                   What it writes                   │  Touches the   │
+│                │                                                             │                                                    │      DB?       │
+├────────────────┼─────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┼────────────────┤
+│ makemigrations │ your models.py vs. the state built from existing migration  │ a new migration file                               │ ❌ No          │
+│                │ files                                                       │                                                    │                │
+├────────────────┼─────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────┼────────────────┤
+│ migrate        │ migration files vs. the django_migrations table             │ SQL executed in the DB + a record in               │ ✅ Yes         │
+│                │                                                             │ django_migrations                                  │                │
+└────────────────┴─────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────┴────────────────┘
+
+Other things worth knowing:
+- The autodetector in makemigrations compares your models against the migration history, not against the live database. That's why migration files must be committed. They're part of your code, and every environment replays the same history.
+- migrate runs each migration inside a transaction on Postgres. If one fails halfway, it's rolled back as if it never started.
+- django_migrations is the builders' logbook: one row per applied migration.
+
+Concept 2: Password hashing
+
+🧒 Simple: The shop never writes your PIN in its notebook. It runs your PIN through a special meat grinder and keeps only the ground-up result. When you log in, it grinds what you typed and compares the results. A thief who steals the notebook only gets ground meat, and you can't un-grind meat back into a PIN.
+
+🛠️ Developer: Django stores algorithm$iterations$salt$hash, e.g. pbkdf2_sha256$870000$<salt>$<hash>.
+- PBKDF2-SHA256 is run 870,000 times (Django 5.1's default), so guessing passwords is slow for attackers.
+- A random salt per user means two users with the same password get different hashes.
+- user.set_password() hashes a password, and user.check_password() compares one. You never store or compare raw passwords yourself.
+
+Concept 3: Superuser, staff, and the admin site
+
+🧒 Simple: The admin site is the shop's back office. is_staff is a key card that opens the back office door. is_superuser is the master key that opens every cabinet inside. Regular customers have neither.
+
+🛠️ Developer:
+- django.contrib.admin auto-generates CRUD screens for every registered model.
+- Access requires is_active=True and is_staff=True. What a staff user can do inside depends on permissions (view/add/change/delete per model), except is_superuser=True, which passes every permission check.
+- createsuperuser creates a user with all three flags set.
+- In Phase 5 we reuse is_staff as our API's "administrator" role.
+
+---
+
+▶️ Your turn (PowerShell)
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+docker compose ps
+Make sure db is (healthy). You restarted it after the timeout test.
+
+Step 1: Generate the migration file
+
+uv run python manage.py makemigrations
+Expected:
+Migrations for 'accounts':
+  accounts\migrations\0001_initial.py
+    + Create model User
+Open accounts\migrations\0001_initial.py. It's the same code you saw in the dry run. Things to notice:
+- initial = True: this is the app's first migration.
+- dependencies = [('auth', '0012_alter_user_first_name_max_length')]: auth's tables must exist first, because of the groups and user_permissions links.
+- Every field is listed, including the ones inherited from AbstractUser, and email has unique=True.
+- managers=[('objects', UserManager())]: User.objects gets helper methods like create_user() and create_superuser(), which hash passwords for you.
+
+Run it again:
+uv run python manage.py makemigrations
+→ No changes detected. Models and migration history now match.
+
+Step 2: See the actual SQL, before running it
+
+uv run python manage.py sqlmigrate accounts 0001
+sqlmigrate prints the SQL a migration would execute, without running it. Look for:
+- CREATE TABLE "accounts_user" ("id" bigint NOT NULL PRIMARY KEY GENERATED BY DEFAULT AS IDENTITY, "password" varchar(128) NOT NULL, ..., "email" varchar(254) NOT NULL UNIQUE);: model → table, and field → column with a type.
+- CREATE TABLE "accounts_user_groups" (... "user_id" bigint NOT NULL, "group_id" integer NOT NULL);: each ManyToMany field gets its own link table (one row per user–group pair).
+- ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY ("user_id") REFERENCES "accounts_user" ("id") DEFERRABLE INITIALLY DEFERRED;: foreign keys, enforced by Postgres.
+- CREATE INDEX "accounts_user_email_..._like" ON "accounts_user" ("email" varchar_pattern_ops);: an extra index so LIKE 'abc%' searches on email are fast.
+- BEGIN; ... COMMIT;: the whole migration is one transaction.
+
+Step 3: Compare before and after
+
+uv run python manage.py showmigrations
+There's a new accounts [ ] 0001_initial section, and everything is still [ ].
+
+Step 4: The first migrate 🎉
+
+uv run python manage.py migrate
+Expected (the order is decided by the dependencies):
+Operations to perform:
+  Apply all migrations: accounts, admin, auth, contenttypes, sessions
+Running migrations:
+  Applying contenttypes.0001_initial... OK
+  Applying contenttypes.0002_remove_content_type_name... OK
+  Applying auth.0001_initial... OK
+  ...
+  Applying auth.0012_alter_user_first_name_max_length... OK
+  Applying accounts.0001_initial... OK
+  Applying admin.0001_initial... OK
+  ...
+  Applying sessions.0001_initial... OK
+Notice that accounts.0001 runs after auth.0012 (its dependency) and before admin.0001, because the admin log table has a foreign key to our user table.
+
+uv run python manage.py showmigrations
+Now everything shows [X].
+
+Step 5: Look inside Postgres
+
+docker compose exec db psql -U shoplite -d shoplite
+\dt
+SELECT id, app, name, applied FROM django_migrations ORDER BY id;
+\d accounts_user
+- \dt lists 10 tables. Check that there's accounts_user and no auth_user. That's the proof AUTH_USER_MODEL worked. You'll also see accounts_user_groups, accounts_user_user_permissions, auth_group, auth_group_permissions, auth_permission, django_admin_log, django_content_type, django_migrations, and django_session.
+- The django_migrations query shows the logbook: one row per applied migration, with a timestamp.
+- \d accounts_user shows the columns, plus Indexes: with accounts_user_email_key UNIQUE CONSTRAINT. That's the database enforcing unique emails.
+
+Leave psql with \q.
+
+Step 6: Create your administrator account
+
+uv run python manage.py createsuperuser
+Because USERNAME_FIELD = 'email' and REQUIRED_FIELDS = ['username'], it asks:
+Email address: (your email)
+Username: admin
+Password:            ← nothing shows while typing; that's normal
+Password (again):
+Superuser created successfully.
+If you type a weak password, the password validators from settings.py complain (This password is too short, too common, entirely numeric) and offer Bypass password validation and create user anyway? [y/N]. Use a real password instead, since it's good practice.
+
+Step 7: Log in to the admin
+
+uv run python manage.py runserver
+1. Open http://127.0.0.1:8000/admin/. The login form now says "Email address" instead of "Username", because of USERNAME_FIELD. Log in.
+2. Under ACCOUNTS → Users you'll see yourself with the columns from list_display: Email, Username, Staff status, Active, Date joined.
+3. Add a test customer: click Add user +. The form asks for Email, Username, Password, Password confirmation (our add_fieldsets + CustomUserCreationForm). Create, for example:
+   - Email: customer@example.com
+   - Username: customer1
+   - Password: any strong password
+
+   After saving, Django shows the full edit page. Notice that Staff status and Superuser status are unticked, so this is a regular customer. Click Save.
+4. Test uniqueness: try Add user again with the same email customer@example.com. You get "User with this Email address already exists." Django checked this because the field is unique=True, and the database would refuse it anyway.
+5. Try the search box on the Users list: search customer.
+
+Stop the server with Ctrl+C.
+
+Step 8: See the password hashes
+
+docker compose exec db psql -U shoplite -d shoplite -c "SELECT id, email, username, is_staff, is_superuser, left(password, 40) AS password_start FROM accounts_user;"
+Two rows. The password column starts with pbkdf2_sha256$870000$.... There are no readable passwords anywhere in the database.
+
+Step 9: Commit the migration
+
+Migration files are code, so they always get committed:
+cd ..
+git status
+git add backend/accounts/migrations/0001_initial.py
+git commit -m "Add initial migration for custom User and apply all migrations"
+
+Password:            ← nothing shows while typing; that's normal
+Password (again):
+Superuser created successfully.
+If you type a weak password, the password validators from settings.py complain (This password is too short, too common, entirely numeric) and offer Bypass password validation and create user anyway? [y/N]. Use a real password instead, since it's good practice.
+
+Step 7: Log in to the admin
+
+uv run python manage.py runserver
+1. Open http://127.0.0.1:8000/admin/. The login form now says "Email address" instead of "Username", because of USERNAME_FIELD. Log in.
+2. Under ACCOUNTS → Users you'll see yourself with the columns from list_display: Email, Username, Staff status, Active, Date joined.
+3. Add a test customer: click Add user +. The form asks for Email, Username, Password, Password confirmation (our add_fieldsets + CustomUserCreationForm). Create, for example:
+   - Email: customer@example.com
+   - Username: customer1
+   - Password: any strong password
+
+   After saving, Django shows the full edit page. Notice that Staff status and Superuser status are unticked, so this is a regular customer. Click Save.
+4. Test uniqueness: try Add user again with the same email customer@example.com. You get "User with this Email address already exists." Django checked this because the field is unique=True, and the database would refuse it anyway.
+5. Try the search box on the Users list: search customer.
+
+Stop the server with Ctrl+C.
+
+Step 8: See the password hashes
+
+docker compose exec db psql -U shoplite -d shoplite -c "SELECT id, email, username, is_staff, is_superuser, left(password, 40) AS password_start FROM accounts_user;"
+Two rows. The password column starts with pbkdf2_sha256$870000$.... There are no readable passwords anywhere in the database.
