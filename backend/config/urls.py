@@ -14,6 +14,8 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+from django.conf import settings
+from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import path
 
@@ -25,3 +27,8 @@ admin.site.index_title = 'Store management'
 urlpatterns = [
     path('admin/', admin.site.urls),
 ]
+
+# In development, let runserver serve uploaded files from MEDIA_ROOT.
+# (In production a web server or cloud storage does this instead; static() does nothing when DEBUG=False.)
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

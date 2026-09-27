@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.db.models import Count
 from django.utils import timezone
+from django.utils.html import format_html
 
 from .models import Category, Product
 
@@ -15,7 +16,12 @@ class CategoryAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         # Count each category's products in the SAME query (one SQL query for
         # the whole list instead of one extra query per row).
-        return super().get_queryset(request).annotate(_product_count=Count('products'))
+        # Explicit order_by: Meta.ordering is ignored in GROUP BY (annotate) queries.
+        return (
+            super().get_queryset(request)
+            .annotate(_product_count=Count('products'))
+            .order_by('name')
+        )
 
     @admin.display(description='Products', ordering='_product_count')
     def product_count(self, obj):
@@ -24,7 +30,8 @@ class CategoryAdmin(admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('name', 'category', 'price', 'stock', 'is_active', 'updated_at')
+    list_display = ('thumbnail', 'name', 'category', 'price', 'stock', 'is_active', 'updated_at')
+    list_display_links = ('name',)  # click the name (not the picture) to open the product
     list_filter = ('is_active', 'category', 'created_at')
     # Edit these columns directly in the list, then press "Save".
     list_editable = ('price', 'stock', 'is_active')
@@ -34,12 +41,23 @@ class ProductAdmin(admin.ModelAdmin):
     autocomplete_fields = ('category',)
     # Fetch each product's category with a JOIN instead of a separate query per row.
     list_select_related = ('category',)
-    readonly_fields = ('created_at', 'updated_at')
+    readonly_fields = ('thumbnail', 'created_at', 'updated_at')
     list_per_page = 25
     actions = ('make_active', 'make_inactive')
 
     # Note: queryset.update() runs ONE SQL UPDATE and skips Model.save(), so
     # auto_now fields are not touched automatically - we set updated_at ourselves.
+
+    @admin.display(description='Image')
+    def thumbnail(self, obj):
+        if not obj.image:
+            return '-'
+        # format_html escapes the values it inserts, so a strange file name can't inject HTML.
+        return format_html(
+            '<img src="{}" alt="{}" style="height:48px;width:48px;object-fit:cover;border-radius:4px">',
+            obj.image.url,
+            obj.name,
+        )
 
     @admin.action(description='Show selected products in the shop')
     def make_active(self, request, queryset):

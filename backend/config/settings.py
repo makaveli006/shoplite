@@ -151,6 +151,12 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# User-uploaded files (product images)
+# MEDIA_ROOT: the folder on disk where uploads are saved.
+# MEDIA_URL: the URL prefix they are served under (/media/products/2026/09/mug.jpg).
+MEDIA_URL = 'media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 

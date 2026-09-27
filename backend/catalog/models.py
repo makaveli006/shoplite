@@ -44,6 +44,9 @@ class Product(models.Model):
         validators=[MinValueValidator(Decimal('0.01'))],
     )
     stock = models.PositiveIntegerField(default=0)
+    # The file is saved under MEDIA_ROOT/products/<year>/<month>/; the database
+    # column only stores that relative path (a short string), not the image itself.
+    image = models.ImageField(upload_to='products/%Y/%m/', blank=True)
     # Hide a product from the shop without deleting it (old orders still refer to it).
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)

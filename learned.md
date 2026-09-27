@@ -2166,3 +2166,159 @@ docker compose exec db psql -U shoplite -d shoplite -c "SELECT action_time, obje
 action_flag: 1 = added, 2 = changed, 3 = deleted.
 
 Stop the server with Ctrl+C.
+
+
+
+
+Part B: Product images
+
+What & why
+
+A shop without pictures doesn't sell much. We add an image to each product, uploaded through the admin (and in Phase 4 through the API). This is also your first "change an existing table" migration.
+
+Files involved (all written, but not yet working, on purpose)
+backend/
+├── catalog/models.py   ← ✏️ image = models.ImageField(upload_to='products/%Y/%m/', blank=True)
+├── catalog/admin.py    ← ✏️ thumbnail column + preview on the edit page (and the order_by fix)
+├── config/settings.py  ← ✏️ MEDIA_URL = 'media/', MEDIA_ROOT = BASE_DIR / 'media'
+├── config/urls.py      ← ✏️ serve /media/... in development
+├── pyproject.toml      ← YOU: uv add pillow
+├── catalog/migrations/0002_product_image.py  ← YOU generate it
+└── media/products/2026/09/*.jpg              ← uploaded files land here (git-ignored)
+How they connect:
+Admin form (multipart upload) ──▶ ImageField validates with Pillow ("is this really an image?")
+     │                                     │
+     │   file bytes ──▶ saved to disk: MEDIA_ROOT / products/2026/09/mug.jpg
+     │   path string ──▶ saved in DB:  catalog_product.image = 'products/2026/09/mug.jpg'
+     ▼
+Browser <img src="/media/products/2026/09/mug.jpg"> ──▶ config/urls.py static() ──▶ file from MEDIA_ROOT
+
+Concept 1: Where uploaded files live (files on disk, path in the database)
+
+🧒 Simple: A library doesn't glue books into its catalogue drawer. The drawer card only says "Shelf 3, row 2." The book sits on the shelf. Our database is the card drawer and stores only the image's location. The picture itself sits in a folder.
+
+🛠️ Developer:
+- ImageField is a FileField subclass. The column is a varchar(100) holding a path relative to MEDIA_ROOT.
+- The file is written by Django's storage backend: FileSystemStorage by default, which writes to MEDIA_ROOT. In production you'd swap that for S3 or another cloud storage without changing model code.
+- Storing images in the database (as blobs) bloats backups and makes every image request hit Postgres.
+- upload_to='products/%Y/%m/' uses date placeholders to spread files over folders.
+- If a file name already exists, Django adds a random suffix (mug_a8Kx2Lp.jpg), so it never overwrites.
+
+Concept 2: Static files vs. media files
+
+🧒 Simple: Static files are the shop's own posters and signs, installed by the shopfitters (the developers). Media files are things customers or staff bring in, like product photos. They come from different places, so they get different storerooms.
+
+🛠️ Developer:
+
+┌──────────────────┬──────────────────────────────────────────────────────────────┬───────────────────────────────────────────────────────────┐
+│                  │                     Static (STATIC_URL)                      │                     Media (MEDIA_URL)                     │
+├──────────────────┼──────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ What             │ CSS/JS/images that ship with the code (e.g. the admin's CSS) │ files uploaded at runtime                                 │
+├──────────────────┼──────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Who creates them │ developers, in Git                                           │ users/staff, never in Git (backend/media/ is ignored)     │
+├──────────────────┼──────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Dev serving      │ automatic via django.contrib.staticfiles                     │ not automatic, which is why we add static(...) in urls.py │
+├──────────────────┼──────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Production       │ collectstatic → web server/CDN                               │ web server or cloud storage                               │
+└──────────────────┴──────────────────────────────────────────────────────────────┴───────────────────────────────────────────────────────────┘
+
+static() only adds URL patterns when DEBUG=True. Serving user uploads through Django is fine for development but slow and risky in production.
+
+Concept 3: Pillow, and why the check will fail first
+
+🧒 Simple: Before accepting a photo, the shop wants an expert to look at it and confirm it's really a picture, not a renamed virus or a text file. Pillow is that expert. Django refuses to use ImageField until the expert is hired.
+
+🛠️ Developer: Pillow is Python's image library. ImageField uses it to open the uploaded file and verify it's a real image, and to read its dimensions. Without Pillow, Django's system check raises fields.E210. I ran check after writing the code, and it fails exactly like that right now. You'll see this error first, on purpose, and fix it with uv.
+
+Concept 4: A migration that changes an existing table (AddField)
+
+🧒 Simple: Adding a new "photo" box to every card that's already in the drawer. The old cards need something in the new box, so they get "no photo" (empty).
+
+🛠️ Developer: makemigrations will create 0002_product_image.py:
+- dependencies = [('catalog', '0001_initial')], because it builds on the first migration.
+- operations = [migrations.AddField(model_name='product', name='image', field=...)]
+
+For existing rows, Postgres needs a value, so the SQL is ADD COLUMN "image" varchar(100) DEFAULT '' NOT NULL, followed by ALTER COLUMN "image" DROP DEFAULT. Existing products get '', meaning "no image", which matches blank=True.
+
+The code, explained
+
+catalog/models.py
+image = models.ImageField(upload_to='products/%Y/%m/', blank=True)   # optional image
+config/settings.py
+MEDIA_URL = 'media/'             # URL prefix: /media/...
+MEDIA_ROOT = BASE_DIR / 'media'  # folder on disk: backend\media\
+config/urls.py
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+catalog/admin.py (the new parts)
+list_display = ('thumbnail', 'name', ...)   # thumbnail column first
+list_display_links = ('name',)              # the NAME is the clickable link, not the picture
+readonly_fields = ('thumbnail', 'created_at', 'updated_at')   # preview on the edit page too
+
+@admin.display(description='Image')
+def thumbnail(self, obj):
+    if not obj.image:
+        return '-'
+    return format_html('<img src="{}" alt="{}" style="height:48px;...">', obj.image.url, obj.name)
+- obj.image.url builds MEDIA_URL + path → /media/products/2026/09/mug.jpg.
+- format_html escapes every {} value before inserting it into HTML. If a product were named <script>..., it would show as text instead of running. Never build HTML with f-strings from data. That's how XSS attacks happen.
+
+---
+
+▶️ Your turn (PowerShell, in backend\)
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+
+Step 1: See the expected failure
+
+uv run python manage.py check
+Expected:
+ERRORS:
+catalog.Product.image: (fields.E210) Cannot use ImageField because Pillow is not installed.
+        HINT: Get Pillow at https://pypi.org/project/Pillow/ or run command "python -m pip install Pillow".
+The hint suggests pip install. In our project we translate that to uv, because pip would install Pillow without recording it in pyproject.toml/uv.lock, so the Docker worker and teammates would never get it.
+
+Step 2: Add Pillow with uv
+
+(Pause OneDrive syncing first if you like.)
+uv add pillow
+uv run python manage.py check
+git diff pyproject.toml
+- uv add → + pillow==12.x.x
+- check → System check identified no issues (0 silenced).
+- The diff shows the new line "pillow>=..." in dependencies. uv.lock changed too.
+
+Step 3: Generate and read the migration
+
+uv run python manage.py makemigrations catalog
+uv run python manage.py sqlmigrate catalog 0002
+Expected: catalog\migrations\0002_product_image.py → + Add field image to product. Open the file and find dependencies = [('catalog', '0001_initial')] and migrations.AddField(...).
+
+In the SQL, look for ADD COLUMN "image" varchar(100) DEFAULT '' NOT NULL and DROP DEFAULT.
+
+Step 4: Apply it and check the existing rows
+
+uv run python manage.py migrate
+docker compose exec db psql -U shoplite -d shoplite -c "SELECT id, name, image FROM catalog_product ORDER BY id;"
+Your 4 products now have an image column containing an empty string. No image yet.
+
+Step 5: Upload images in the admin
+
+Find 2–3 pictures on your PC (any .jpg/.png/.webp: photos, downloads, even screenshots).
+uv run python manage.py runserver
+1. Products → open Blue Ceramic Mug → the new Image field → Choose file → Save.
+2. The product list now shows the thumbnail column. Open the product again, and there's also a preview near the timestamps.
+3. Right-click the thumbnail → Open image in new tab. The URL looks like http://127.0.0.1:8000/media/products/2026/09/yourfile.jpg. In the runserver log you'll see GET /media/products/2026/09/... 200, served by our static() URL pattern.
+4. Validation test: make a fake image:
+Set-Content $env:TEMP\fake.jpg "this is not an image"
+   Upload fake.jpg (it's in %TEMP%: type %TEMP% in the file dialog's path bar). Expected: "Upload a valid image. The file you uploaded was either not an image or a corrupted image." That's Pillow inspecting the actual bytes, not trusting the .jpg extension.
+5. Name collision test: upload the same picture to a second product. Then look at the folder:
+Get-ChildItem -Recurse media
+   The second copy got a random suffix like mug_Xy12AbC.jpg.
+
+Stop the server with Ctrl+C.
+
+Step 6: See the database side
+
+docker compose exec db psql -U shoplite -d shoplite -c "SELECT id, name, image FROM catalog_product ORDER BY id;"
+The image column contains only paths like products/2026/09/mug.jpg. The image bytes live in backend\media\.
