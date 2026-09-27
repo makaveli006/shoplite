@@ -56,6 +56,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    # Our apps
+    'accounts',
 ]
 
 MIDDLEWARE = [
@@ -100,8 +102,16 @@ DATABASES = {
         'PASSWORD': os.environ['DB_PASSWORD'],
         'HOST': os.getenv('DB_HOST', 'localhost'),
         'PORT': os.getenv('DB_PORT', '5432'),
+        'OPTIONS': {
+            # Give up after 5 seconds instead of hanging when the database is down.
+            'connect_timeout': 5,
+        },
     }
 }
+
+# Use our own user model (accounts/models.py) instead of django.contrib.auth's User.
+# Must be set BEFORE the first `migrate`.
+AUTH_USER_MODEL = 'accounts.User'
 
 
 # Password validation
