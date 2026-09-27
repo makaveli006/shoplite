@@ -1105,3 +1105,151 @@ Diagnosis: "settings.py line 35 needed DJANGO_SECRET_KEY and tt, so the .env fil
 Rename-Item .env.hidden .env
 uv run python manage.py check
 Expected: System check identified no issues (0 silenced).
+
+
+
+
+What & why
+
+Django is still configured for SQLite (the empty db.sqlite3 file). Our store needs PostgreSQL, and it's already running in Docker from Phase 1. Today we point Django at it. We still don't run migrate, because the custom User model comes first (Lesson 2.5).
+
+Files involved
+django-ecommerce/
+├── .env                    ← (unchanged) POSTGRES_* : Docker Compose uses these to CREATE the database
+└── backend/
+    ├── .env                ← CHANGED: added DB_NAME / DB_USER / DB_PASSWORD / DB_HOST / DB_PORT
+    ├── .env.example        ← CHANGED: the same keys with a placeholder password
+    ├── config/settings.py  ← CHANGED: DATABASES now uses the postgresql engine
+    └── db.sqlite3          ← DELETE: no longer used
+How the pieces connect:
+root .env ──(compose, first boot)──▶ Postgres container creates user "shoplite", password, database "shoplite"
+                                          ▲  listening on container port 5432
+                                          │  Docker forwards Windows localhost:5433 → container 5432
+backend/.env ──load_dotenv──▶ settings.DATABASES ──psycopg──▶ localhost:5433
+The two .env files are read by different programs: Compose reads the root one, and Django reads backend\.env. That's why the name, user, and password appear in both, and they must match.
+
+---
+
+Concept 1: Database connection settings
+
+🧒 Simple: To phone a company's accounts department you need the company's number (host), the extension (port), which department (database name), and your staff ID and PIN (user and password). Get any one wrong and you don't get through.
+
+🛠️ Developer: Django's DATABASES['default'] holds exactly those five values, plus ENGINE, which says which backend to use.
+
+┌─────────────────┬───────────────────────────────┬─────────────────────────────────────────────────────────────────────────┐
+│       Key       │           Our value           │                                 Meaning                                 │
+├─────────────────┼───────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ ENGINE          │ django.db.backends.postgresql │ Django's PostgreSQL backend. It uses the psycopg 3 driver we installed. │
+├─────────────────┼───────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ HOST            │ localhost                     │ the machine to connect to (your PC, where Docker forwards the port)     │
+├─────────────────┼───────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ PORT            │ 5433                          │ the forwarded port (5432 would reach your Windows Postgres 15)          │
+├─────────────────┼───────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ NAME            │ shoplite                      │ which database on that server                                           │
+├─────────────────┼───────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ USER / PASSWORD │ shoplite / shoplite_dev_pw    │ the login created by the container on first boot                        │
+└─────────────────┴───────────────────────────────┴─────────────────────────────────────────────────────────────────────────┘
+
+Concept 2: ORM, database backend, and driver
+
+🧒 Simple: You speak English (Python). The database only understands its own language (SQL). The ORM is your translator: you say "give me all products under $20," and it writes the SQL. The driver is the phone line that carries the translated words to the database.
+
+🛠️ Developer: There are three layers:
+1. ORM: Product.objects.filter(price__lt=20) builds a query object.
+2. Database backend (django.db.backends.postgresql): compiles it into Postgres-flavoured SQL, e.g. SELECT ... WHERE "price" < 20.
+3. Driver (psycopg): opens the TCP connection, sends the SQL, and returns rows as Python values.
+
+Swapping SQLite for Postgres only changes layers 2 and 3. Your model code stays exactly the same. Django connects lazily: nothing connects at import time. The first query opens a connection, and by default it's closed at the end of each request.
+
+---
+
+The code, explained
+
+config/settings.py
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',  # uses the psycopg (v3) driver
+        'NAME': os.environ['DB_NAME'],              # required → fail fast if missing
+        'USER': os.environ['DB_USER'],
+        'PASSWORD': os.environ['DB_PASSWORD'],
+        'HOST': os.getenv('DB_HOST', 'localhost'),  # optional, with sensible defaults
+        'PORT': os.getenv('DB_PORT', '5432'),
+    }
+}
+- Name, user, and password have no defaults. A missing credential should crash loudly (Lesson 2.3's fail-fast rule).
+- Host and port have the standard Postgres defaults, but our .env sets DB_PORT=5433. In Phase 8 the worker container gets DB_HOST=db and DB_PORT=5432 from Compose, which override .env because real env vars win. That's why these are variables and not fixed values.
+
+backend/.env (new part):
+DB_NAME=shoplite
+DB_USER=shoplite
+DB_PASSWORD='shoplite_dev_pw'
+DB_HOST=localhost
+DB_PORT=5433
+
+I already verified the connection (read-only). Django reached PostgreSQL 16.15 on port 5433, and \dt in the container still says "Did not find any relations". Connecting doesn't create tables. Only migrate does.
+
+---
+
+▶️ Your turn (PowerShell)
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+docker compose ps
+Both db and redis should be (healthy). The database must be running before Django can connect. (docker compose finds the compose file in the parent folder automatically.)
+
+Step 1: Remove the SQLite file
+
+Remove-Item db.sqlite3
+
+Step 2: Ask Django which database it's really talking to
+
+uv run python manage.py shell -c "from django.db import connection; c = connection.cursor(); c.execute('SELECT version()'); print(connection.vendor, connection.settings_dict['PORT'], c.fetchone()[0])"
+Expected: postgresql 5433 PostgreSQL 16.15 (Debian ...) ...
+- connection is Django's database connection object, and .cursor() opens the real connection.
+- c.execute('SELECT version()') runs raw SQL through Django: the same query you typed in psql in Lesson 1.4.
+
+Step 3: See what migrate would do, without doing it
+
+uv run python manage.py showmigrations
+Expected: lists for admin, auth, contenttypes, and sessions, every line with an empty [ ].
+- Each line is one migration file that ships with Django. [ ] means not applied, and [X] will mean applied.
+- Django stores applied migrations in a table called django_migrations. It doesn't exist yet, so everything is [ ].
+
+(We'll dig into migrations properly in Lesson 2.6.)
+
+Step 4: Debugging practice, two classic failures
+
+(a) Wrong port. You'd reach the other Postgres:
+$env:DB_PORT = "5432"
+uv run python manage.py showmigrations
+Read the last line of the traceback:
+django.db.utils.OperationalError: connection failed: ... port 5432 failed: FATAL:  password authentication failed for user "shoplite"
+This is the same message you saw with psql in Lesson 1.4. Diagnosis: the server answered, so the network is fine, but it doesn't know our user, so it's the wrong server. Undo it:
+Remove-Item Env:DB_PORT
+
+(b) Database not running:
+docker compose stop db
+uv run python manage.py showmigrations
+Last line, roughly:
+django.db.utils.OperationalError: connection failed: connection to server at "127.0.0.1", port 5433 failed: Connection refused
+    Is the server running on that host and accepting TCP/IP connections?
+Diagnosis: nobody answered on 5433, so the server is down or on a different port. Start it again and wait for healthy:
+docker compose start db
+docker compose ps
+uv run python manage.py showmigrations
+
+Learn to tell these three database errors apart:
+
+┌────────────────────────────────┬─────────────────────────────────────────────┬──────────────────────────────────────────────┐
+│           Error text           │                   Meaning                   │             First thing to check             │
+├────────────────────────────────┼─────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Connection refused             │ Nothing listening on that host:port         │ docker compose ps, and DB_PORT               │
+├────────────────────────────────┼─────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ password authentication failed │ Something answered but rejected the login   │ Wrong server/port, or wrong password in .env │
+├────────────────────────────────┼─────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ database "xyz" does not exist  │ Right server and login, wrong database name │ DB_NAME vs. POSTGRES_DB                      │
+└────────────────────────────────┴─────────────────────────────────────────────┴──────────────────────────────────────────────┘
+
+Step 5: Start the server once more
+
+uv run python manage.py runserver
+It starts as before, still with the "18 unapplied migrations" warning, but this time the check ran against Postgres. Stop it with Ctrl+C.
