@@ -255,3 +255,42 @@ Git
 uv
 - 🧒 Simple: A very fast personal assistant for Python. It fetches the right Python version, sets up an isolated workspace for this project, and installs exactly the libraries we list.
 - 🛠️ Developer: A Rust-based replacement for pip + venv + pip-tools + pyenv. It manages Python installs, virtual environments, pyproject.toml dependencies, and a cross-platform uv.lock. It's much faster than pip and gives reproducible installs. (Deep dive in Phase 2.)
+
+
+Concept 1: Git repository, staging, commit
+
+🧒 Simple: Think of a photo album for your project. git add puts photos on the table ("I want these in the next page"). git commit glues them onto a new page with a caption. You can always flip back to any page.
+
+🛠️ Developer:
+- git init creates a hidden .git/ folder: the database of every snapshot.
+- Files move through three areas:
+  - Working directory: your actual files
+  - Staging area (index): what you've chosen for the next snapshot, with git add
+  - Repository: saved snapshots, with git commit
+- Each commit stores who, when, a message, and a pointer to its parent commit. That chain is the history you see in git log.
+- -b main names the first branch main. Your Git has no default set, so otherwise it would use the older name master.
+
+Your Git identity is already configured (name + email), so commits will work.
+
+
+Concept 2: .gitignore
+
+🧒 Simple: A "do not pack" list for moving house. The house key (passwords) and rubbish bags (generated junk) stay behind. Only the real furniture (your code) goes into the album.
+
+🛠️ Developer: Git checks each untracked file against the patterns in .gitignore. Matching files never show up in git status and can't be added by accident.
+
+Rule of thumb: commit the recipe (pyproject.toml, uv.lock, package.json, package-lock.json), never the cooked result (.venv, node_modules). Note that uv.lock must be committed, because it's what makes installs reproducible.
+
+Concept 3: Line endings (.gitattributes)
+
+🧒 Simple: Windows and Linux mark "end of line" differently. It's like two countries writing dates differently (27/09 vs. 09/27). Usually harmless, but a Linux program reading a Windows-style script gets confused and fails.
+
+🛠️ Developer:
+- Windows uses CRLF (\r\n), while Linux uses LF (\n).
+- Your Git has core.autocrlf=true, so it converts files to CRLF when it writes them to disk on Windows.
+- Our Celery worker runs in a Linux container. A shell script with CRLF there fails with confusing errors like /bin/sh^M: bad interpreter or exec format error.
+- .gitattributes overrides this per file type:
+  - * text=auto: Git normalises line endings for all text files in the repo.
+  - *.sh text eol=lf and Dockerfile text eol=lf: these always stay LF on disk, even on Windows.
+
+Setting this now, before those files exist, means the bug never happens.
