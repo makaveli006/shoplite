@@ -1,14 +1,43 @@
+from django.utils.text import slugify
 from rest_framework import serializers
 
-from .models import Product
+from .models import Category, Product
+
+
+class CategorySerializer(serializers.ModelSerializer):
+    """Full category, used by the /api/categories/ endpoints."""
+
+    class Meta:
+        model = Category
+        fields = ['id', 'name', 'slug', 'description']
+
+
+class CategorySummarySerializer(serializers.ModelSerializer):
+    """Small version of a category, nested inside each product."""
+
+    class Meta:
+        model = Category
+        fields = ['id', 'name', 'slug']
 
 
 class ProductSerializer(serializers.ModelSerializer):
     """Converts Product objects <-> JSON.
 
-    ModelSerializer reads the model to build matching serializer fields
-    (types, max lengths, validators), so we only list which fields to include.
+    Reading:  "category": {"id": 2, "name": "Kitchen", "slug": "kitchen"}
+    Writing:  "category_id": 2
     """
+
+    # Output only: the nested category object.
+    category = CategorySummarySerializer(read_only=True)
+    # Input only: the category's id. source='category' means "this sets product.category".
+    # DRF checks the id exists in the queryset, otherwise it returns a 400 error.
+    category_id = serializers.PrimaryKeyRelatedField(
+        source='category',
+        queryset=Category.objects.all(),
+        write_only=True,
+    )
+    # Computed, read-only value that is not a database column.
+    in_stock = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -19,9 +48,33 @@ class ProductSerializer(serializers.ModelSerializer):
             'description',
             'price',
             'stock',
+            'in_stock',
             'image',
             'is_active',
             'category',
+            'category_id',
             'created_at',
             'updated_at',
         ]
+
+    def get_in_stock(self, obj):
+        return obj.stock > 0
+
+    def validate(self, attrs):
+        """Object-level validation: runs after every field has been validated on its own."""
+        # When creating a product without a slug, Product.save() would build one from
+        # the name. Check it here so a duplicate returns a clear 400 error instead of
+        # crashing with a database IntegrityError (500).
+        if self.instance is None and not attrs.get('slug'):
+            slug = slugify(attrs['name'])
+            if not slug:
+                raise serializers.ValidationError(
+                    {'name': 'The name must contain at least one letter or digit.'}
+                )
+            if Product.objects.filter(slug=slug).exists():
+                raise serializers.ValidationError(
+                    {'slug': f'A product with the slug "{slug}" already exists. '
+                             'Use a different name or send your own slug.'}
+                )
+            attrs['slug'] = slug
+        return attrs
