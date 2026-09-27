@@ -878,3 +878,230 @@ Quit the server with CTRL-BREAK.
 ▎ 🛑 IMPORTANT: do not run migrate yet, even though Django suggests it
 ▎
 ▎ Migrating now would create the built-in auth_user table. We're going to replace Django's default User with our own custom User model (Lesson 2.5), and Django's docs warn that switching the user model after the first migration is very painful. We'll migrate once, properly, in Lesson 2.6. The warning is safe to ignore until then.
+
+
+
+
+
+Step 5: Visit it in the browser
+
+1. Open http://127.0.0.1:8000/. You'll see Django's rocket 🚀 "The install worked successfully!" page. It only appears because DEBUG=True and you have no URL for /.
+2. Open http://127.0.0.1:8000/nothing-here/. You'll see a yellow 404 debug page listing the URL patterns Django tried (admin/). This is Concept 3 in action: URL matching failed, so there's no view and the result is 404.
+3. Look at the PowerShell window. Every request is logged:
+[27/Sep/2026 13:05:10] "GET / HTTP/1.1" 200 12068
+[27/Sep/2026 13:05:21] "GET /nothing-here/ HTTP/1.1" 404 2261
+   That's the method, path, status code, and response size in bytes, the same parts of HTTP you studied in Lesson 0.1.
+4. Don't open /admin/ yet. It needs the tables we haven't migrated, so you'd get a no such table error.
+
+Auto-reload: "Watching for file changes with StatReloader" means that when you save a .py file, the server restarts itself. You'll rely on this constantly.
+
+Stop the server with Ctrl+C.
+
+Step 6: A side effect to notice
+
+Get-ChildItem
+You'll probably see a new db.sqlite3 file. The migration check at startup opened the default SQLite database, and SQLite creates the file on first connection. It's empty and harmless, and .gitignore already ignores *.sqlite3. We delete it in Lesson 2.4 when we switch to Postgres.
+
+
+1. Open http://127.0.0.1:8000/. You'll see Django's rocket 🚀 "The install worked successfully!" page. It only appears because DEBUG=True and you have no URL for /.
+2. Open http://127.0.0.1:8000/nothing-here/. You'll see a yellow 404 debug page listing the URL patterns Django tried (admin/). This is Concept 3 in action: URL matching failed, so there's no view and the result is 404.
+3. Look at the PowerShell window. Every request is logged:
+[27/Sep/2026 13:05:10] "GET / HTTP/1.1" 200 12068
+[27/Sep/2026 13:05:21] "GET /nothing-here/ HTTP/1.1" 404 2261
+   That's the method, path, status code, and response size in bytes, the same parts of HTTP you studied in Lesson 0.1.
+4. Don't open /admin/ yet. It needs the tables we haven't migrated, so you'd get a no such table error.
+
+Auto-reload: "Watching for file changes with StatReloader" means that when you save a .py file, the server restarts itself. You'll rely on this constantly.
+
+Stop the server with Ctrl+C.
+
+
+
+
+
+
+What & why
+
+Right now settings.py contains SECRET_KEY = 'django-insecure-...', DEBUG = True, and ALLOWED_HOSTS = [] written directly in code, and that file is committed to Git. Today we move these values into backend\.env, a git-ignored file. The same code can then run with different values on your laptop, in the Docker worker, and on a real server.
+
+Files involved
+backend/
+├── .env            ← NEW (I created it, git-ignored): YOUR real values, including a freshly generated secret key
+├── .env.example    ← NEW (committed): the same keys with placeholders, plus how to generate a key
+└── config/
+    └── settings.py ← CHANGED: reads SECRET_KEY / DEBUG / ALLOWED_HOSTS from the environment
+How they connect:
+manage.py → imports config/settings.py → load_dotenv(BASE_DIR / '.env')
+                                            │ copies each KEY=value into os.environ
+                                            ▼          (unless that KEY already exists there)
+                    SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
+                    DEBUG      = env_bool('DJANGO_DEBUG')
+                    ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS')
+
+---
+
+Concept 1: Environment variables
+
+🧒 Simple: Think of a hotel. The building (your code) is the same for every guest. But each guest gets their own key card with their room number and access rights (the configuration). You don't rebuild the hotel for a new guest. You program a new card.
+
+🛠️ Developer: Every running process has a set of key/value strings called environment variables, inherited from whatever started it (PowerShell, Docker, a server). Python reads them through os.environ. The "12-factor app" principle says configuration that changes between environments (secrets, debug flags, hostnames, database addresses) belongs in env vars, not in code. Then:
+- the same code runs in dev, in Docker, and in production;
+- secrets never enter Git;
+- changing configuration doesn't require a code change.
+
+Concept 2: .env files and python-dotenv
+
+🧒 Simple: Typing all your key-card settings by hand every morning would be tedious. A .env file is a sticky note next to the door with all the settings written down. load_dotenv reads the sticky note and programs the card for you.
+
+🛠️ Developer: load_dotenv(path) parses KEY=value lines and inserts them into os.environ. I checked the python-dotenv docs: by default override=False, so a variable that already exists in the real environment wins over the file. That's deliberate. In Phase 8, Docker Compose will set DB_HOST=db for the worker, and that must beat DB_HOST=localhost from .env. In the file, a value in single quotes is taken literally, so characters like $ and # in the secret key can't be misread as variables or comments.
+
+Concept 3: SECRET_KEY, DEBUG, ALLOWED_HOSTS
+
+🧒 Simple:
+- SECRET_KEY is the wax seal stamp the shop uses on receipts. If a thief copies the stamp, they can forge receipts ("this person is logged in as the admin").
+- DEBUG=True is the workshop mode where the walls are made of glass: great for the builder, a disaster if customers can see the wiring.
+- ALLOWED_HOSTS is the list of addresses this shop answers to. Letters addressed to other names get thrown away.
+
+🛠️ Developer:
+- SECRET_KEY is used for cryptographic signing: session cookies, password-reset tokens, and the signing module. In Phase 5 SimpleJWT signs tokens with it by default. The old key in settings.py is in Git history now (commit c9bd276), so treat it as leaked. That's why I generated a new one with Django's get_random_secret_key() for your .env.
+- DEBUG=True shows full tracebacks with local variables and settings, serves static files, and keeps extra data in memory. In production that leaks internals. Our code defaults to False, so forgetting to set it is the safe mistake.
+- ALLOWED_HOSTS: Django rejects requests whose Host header isn't listed. This protects against Host-header attacks such as poisoned password-reset links. When DEBUG=False, Django refuses to start without it.
+
+Concept 4: "Fail fast"
+
+🧒 Simple: A car that refuses to start with no oil is annoying. A car that starts and seizes on the motorway is dangerous.
+
+🛠️ Developer: os.environ['DJANGO_SECRET_KEY'] (square brackets) raises KeyError right at startup if the variable is missing. Compare os.getenv('X', 'some-default'), which silently continues. A missing secret key must be a loud error, never a silent fallback to a known value. For DEBUG/ALLOWED_HOSTS, safe defaults are fine, so we use os.getenv.
+
+---
+
+The code, explained (config/settings.py)
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv            # from the python-dotenv package we added with uv
+
+BASE_DIR = Path(__file__).resolve().parent.parent   # = backend\
+
+load_dotenv(BASE_DIR / '.env')           # an absolute path, so it works no matter which folder you run from
+
+written down. load_dotenv reads the sticky note and programs the card for you.
+
+🛠️ Developer: load_dotenv(path) parses KEY=value lines and inserts them into os.environ. I checked the python-dotenv docs: by default override=False, so a variable that already exists in the real environment wins over the file. That's deliberate. In Phase 8, Docker Compose will set DB_HOST=db for the worker, and that must beat DB_HOST=localhost from .env. In the file, a value in single quotes is taken literally, so characters like $ and # in the secret key can't be misread as variables or comments.
+
+Concept 3: SECRET_KEY, DEBUG, ALLOWED_HOSTS
+
+🧒 Simple:
+- SECRET_KEY is the wax seal stamp the shop uses on receipts. If a thief copies the stamp, they can forge receipts ("this person is logged in as the admin").
+- DEBUG=True is the workshop mode where the walls are made of glass: great for the builder, a disaster if customers can see the wiring.
+- ALLOWED_HOSTS is the list of addresses this shop answers to. Letters addressed to other names get thrown away.
+
+🛠️ Developer:
+- SECRET_KEY is used for cryptographic signing: session cookies, password-reset tokens, and the signing module. In Phase 5 SimpleJWT signs tokens with it by default. The old key in settings.py is in Git history now (commit c9bd276), so treat it as leaked. That's why I generated a new one with Django's get_random_secret_key() for your .env.
+- DEBUG=True shows full tracebacks with local variables and settings, serves static files, and keeps extra data in memory. In production that leaks internals. Our code defaults to False, so forgetting to set it is the safe mistake.
+- ALLOWED_HOSTS: Django rejects requests whose Host header isn't listed. This protects against Host-header attacks such as poisoned password-reset links. When DEBUG=False, Django refuses to start without it.
+
+Concept 4: "Fail fast"
+
+🧒 Simple: A car that refuses to start with no oil is annoying. A car that starts and seizes on the motorway is dangerous.
+
+🛠️ Developer: os.environ['DJANGO_SECRET_KEY'] (square brackets) raises KeyError right at startup if the variable is missing. Compare os.getenv('X', 'some-default'), which silently continues. A missing secret key must be a loud error, never a silent fallback to a known value. For DEBUG/ALLOWED_HOSTS, safe defaults are fine, so we use os.getenv.
+
+---
+
+The code, explained (config/settings.py)
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv            # from the python-dotenv package we added with uv
+
+BASE_DIR = Path(__file__).resolve().parent.parent   # = backend\
+
+load_dotenv(BASE_DIR / '.env')           # an absolute path, so it works no matter which folder you run from
+
+
+def env_bool(name, default=False):
+    # env vars are ALWAYS strings: "False" is a non-empty string, which Python treats as True!
+
+from dotenv import load_dotenv            # from the python-dotenv package we added with uv
+
+BASE_DIR = Path(__file__).resolve().parent.parent   # = backend\
+
+load_dotenv(BASE_DIR / '.env')           # an absolute path, so it works no matter which folder you run from
+
+
+def env_bool(name, default=False):
+    # env vars are ALWAYS strings: "False" is a non-empty string, which Python treats as True!
+    # So we convert explicitly: only "1/true/yes/on" count as True.
+    return os.getenv(name, str(default)).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def env_list(name, default=''):
+    # "localhost, 127.0.0.1" → ['localhost', '127.0.0.1']  (ignores spaces and empty items)
+    return [item.strip() for item in os.getenv(name, default).split(',') if item.strip()]
+
+
+SECRET_KEY = os.environ['DJANGO_SECRET_KEY']                        # required: crash if missing
+DEBUG = env_bool('DJANGO_DEBUG', False)                             # safe default: off
+ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1')
+The #1 beginner bug this code avoids: DEBUG = os.getenv('DJANGO_DEBUG') gives the string "False", and bool("False") is True. Environment variables are always text, so you must convert them yourself.
+
+backend\.env (yours, ignored by Git):
+DJANGO_SECRET_KEY='8h3p…'   # 50 random characters, generated for you
+DJANGO_DEBUG=True
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
+I already ran manage.py check and read the settings back. Django starts, the key loads with all 50 characters, and git status shows .env.example but not .env.
+
+---
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent   # = backend\
+
+
+
+
+
+▶️ Your turn (PowerShell, in backend\)
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+
+Step 1: See exactly what changed
+
+git diff config/settings.py
+Lines starting with - (red) were removed and lines with + (green) were added. Reviewing a diff before committing is a habit worth building now.
+
+Step 2: Ask Django which values it actually loaded
+
+uv run python manage.py shell -c "from django.conf import settings; print(settings.DEBUG, settings.ALLOWED_HOSTS, settings.SECRET_KEY[:4])"
+Expected: True ['localhost', '127.0.0.1'] 8h3p
+manage.py shell -c "..." runs one Python snippet with Django fully loaded. django.conf.settings is the final, computed settings object. This is the most reliable way to answer "what value is Django really using?"
+
+Step 3: Prove "real environment beats .env"
+
+$env:DJANGO_DEBUG = "False"
+uv run python manage.py shell -c "from django.conf import settings; print(settings.DEBUG)"
+Expected: False. $env:NAME = "..." sets an env var for this PowerShell window only, and it beat the True in .env.
+
+With it still set, start the server:
+uv run python manage.py runserver
+Open http://127.0.0.1:8000/nothing-here/. Instead of the yellow debug page you now get a plain "Not Found", which is what visitors would see in production. Even / now returns "Not Found", because the rocket page only exists in debug mode. Stop the server (Ctrl+C) and clean up:
+Remove-Item Env:DJANGO_DEBUG
+uv run python manage.py shell -c "from django.conf import settings; print(settings.DEBUG)"
+Back to True, from the .env file.
+
+Step 4: Watch "fail fast" happen, and practise reading a traceback
+
+Temporarily hide the .env file:
+Rename-Item .env .env.hidden
+uv run python manage.py check
+You'll get a long traceback. Read Python tracebacks from the bottom up. The last line is what went wrong, and the lines just above it show where:
+  File "...\backend\config\settings.py", line 35, in <module>
+    SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
+  ...
+KeyError: 'DJANGO_SECRET_KEY'
+Diagnosis: "settings.py line 35 needed DJANGO_SECRET_KEY and tt, so the .env file wasn't loaded." Put it back and confirm:
+Rename-Item .env.hidden .env
+uv run python manage.py check
+Expected: System check identified no issues (0 silenced).
