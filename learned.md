@@ -3112,3 +3112,181 @@ curl.exe -s -o NUL -w "admin:     %{http_code}`n" -u $admin "$api/products/disco
 Step 4: Read the server log (Window 1)
 
 You'll see Django logging each non-2xx response with its reason: Forbidden: /api/products/, Bad Request: /api/products/, Conflict: /api/categories/kitchen/, Not Found: /api/products/brand-new-teapot/. It's a handy one-line summary of what went wrong.
+
+
+
+
+What & why
+
+The product list returns everything at once, with no way to search or filter. A real shop page needs:
+- Search: "mug"
+- Filtering: category = Kitchen, price between 15 and 45, only in-stock items
+- Sorting: cheapest first
+- Pagination: 12 products per page instead of thousands in one response
+
+All of these are driven by URL query parameters, which is exactly what the React product page will send in Phase 11.
+
+Files involved (written and verified; details below)
+backend/
+├── pyproject.toml / uv.lock     ← YOU: uv add django-filter
+├── config/settings.py           ← ✏️ 'django_filters' app; pagination + filter backends in REST_FRAMEWORK
+├── core/pagination.py           ← NEW: StandardPagination (12 per page, ?page_size= up to 100)
+├── core/filters.py              ← NEW: StableOrderingFilter (a tie-breaker so pages never overlap)
+├── catalog/filters.py           ← NEW: ProductFilter (category, min_price, max_price, in_stock)
+└── catalog/views.py             ← ✏️ filterset_class, search_fields, ordering_fields; categories not paginated
+
+A dependency-resolution story from my verification (a real-world lesson)
+
+To test the code before you install anything, I first used uv run --with django-filter, which adds a package temporarily without touching pyproject.toml. It crashed: ImportError: cannot import name 'cc_delim_re' from 'django.utils.cache'.
+
+Root cause:
+- The newest django-filter requires Django 5.2 or newer.
+- My temporary overlay therefore pulled in a newer Django, which shadowed your 5.1.7.
+- DRF then tried to import something that Django version no longer has.
+
+How I checked what you will get: I asked uv's resolver with your pin (django==5.1.7), and it picks django-filter 25.1, the newest version compatible with Django 5.1. Re-running the tests with exactly those versions p
+
+Why this matters to you: it's the resolver's job, from Lesson v add django-filter respects your django==5.1.7 pin andautomatically chooses an older compatible django-filter. This is also a preview of Phase 16: upgrading to Django 5.2 will let django-filter move forward
+too.
+
+---
+
+Concept 1: Query parameters (the customer's "requests slip")
+
+🧒 Simple: The URL path says which shelf (/api/products/). Thehed to your request: "only kitchen items, under $45, cheapestfirst, show me page 2." The same shelf answers differently depending on the note.
+
+🛠️ Developer:
+- The query string ?category=kitchen&max_price=45&ordering=priue pairs separated by &. DRF exposes it asrequest.query_params.
+- Query parameters are for reading/narrowing (GET). They're bo in Phase 11 React will keep them in the browser's URL, so"Back" and "copy link" work naturally.
+
+Concept 2: The filter-backend pipeline
+
+🧒 Simple: Your request passes through a line of helpers. The first removes everything that isn't in your category or price range. The second keeps only
+items matching your search words. The third sorts what's left.ges and hands you one page.
+
+🛠️ Developer: For list, DRF runs:
+get_queryset()                         Product.objects.select_related('category') [+ is_active for non-staff]
+  → DjangoFilterBackend                ?category= ?min_price= alog/filters.py)
+  → SearchFilter                       ?search=                                         (search_fields)
+  → StableOrderingFilter               ?ordering=             dering_fields)
+  → StandardPagination                 ?page= ?page_size=                               → LIMIT / OFFSET
+  → ProductSerializer(many=True)       → JSON
+Every step only adds to the SQL (WHERE, ORDER BY, LIMIT/OFFSET). Nothing is filtered in Python, and the database does all the work in one query plus one
+COUNT(*) for pagination.
+
+The backends are enabled globally in settings.py, but each doegures it (filterset_class, search_fields, ordering_fields).
+
+Concept 3: Filtering with django-filter (exact rules)
+
+🧒 Simple: Filters are tick-boxes and ranges in a shop's sidebce: 15–45", "☑ In stock only."
+
+🛠️ Developer: A FilterSet declares which parameters exist and
+category  = filters.CharFilter(field_name='category__slug')                   # WHERE category.slug = %s  (JOIN)
+min_price = filters.NumberFilter(field_name='price', lookup_ex >= %s
+max_price = filters.NumberFilter(field_name='price', lookup_expr='lte')       # WHERE price <= %s
+in_stock  = filters.BooleanFilter(method='filter_in_stock')   c
+- django-filter validates the values with Django forms. ?min_price=abc returns a 400 {"min_price": ["Enter a number."]} instead of crashing.
+- Parameters that aren't declared are ignored.
+- method='filter_in_stock' calls our function for rules that don't map to one field lookup (true → stock > 0, false → stock = 0).
+
+Concept 4: Search (fuzzy words) vs. filters (exact rules)
+
+🧒 Simple: A filter is a precise tick-box. Search is typing into the shop's search bar: "mug" should find the Blue Ceramic Mug even though you didn't type
+the full name.
+
+🛠️ Developer:
+- search_fields = ['name', 'description', 'category__name'] plus ?search=mug produces WHERE (name ILIKE '%mug%' OR description ILIKE '%mug%' OR
+  category.name ILIKE '%mug%').
+- Several words (?search=blue mug) must each match somewhere (AND between words, OR between fields).
+- It's simple and works well for a small catalogue. Big shops  or a search engine, which is a possible "next step" after thecourse.
+
+Concept 5: Ordering, and why pages need a stable order
+
+🧒 Simple: "Sort by price." But if two items cost exactly the same, which comes first? If the answer can change between page loads, an item could show up
+on page 1 and page 2, or on neither.
+
+🛠️ Developer:
+- ?ordering=price (ascending) or ?ordering=-price (descending). Only fields in ordering_fields are allowed. ?ordering=stock is silently ignored, falling
+  back to the default, so clients can't sort by arbitrary (may.
+- Pagination uses ORDER BY price LIMIT 12 OFFSET 12. When prices tie, Postgres may return tied rows in any order (Lesson 1.4 again).
+- StableOrderingFilter appends -id as a final tie-breaker. id tal and every product appears on exactly one page.
+
+Concept 6: Pagination
+
+🧒 Simple: A catalogue with 10,000 products isn't handed over ge 1 of 834 with "next page" and "previous page" buttons.
+
+🛠️ Developer: PageNumberPagination runs a COUNT(*) plus a LIMI results:
+{
+  "count": 20,
+  "next": "http://127.0.0.1:8000/api/products/?page=2",
+  "previous": null,
+  "results": [ ... 12 products ... ]
+}
+- next/previous are complete URLs that keep your other parameters (?ordering=-price&page=2&page_size=3). The frontend just follows them, or reads count to
+  draw page numbers.
+- page_size_query_param = 'page_size' lets clients ask for a different size, and max_page_size = 100 stops someone from requesting a million rows.
+- A page beyond the end → 404 {"detail": "Invalid page."}.
+- Categories: pagination_class = None on CategoryViewSet, because 5 categories are simpler for a dropdown as a plain list.
+
+⚠️ The response shape changed from a list [...] to an object {count, next, previous, results}. Anything reading /api/products/ must now look inside
+results. React will be written for this shape from the start.
+
+---
+
+▶️ Your turn
+
+Window 1:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+
+Step 1: Install django-filter and watch the resolver pick a compatible version
+
+uv add django-filter
+uv tree --depth 1
+uv run python manage.py check
+- Expect + django-filter==25.1, not the newest release, becaus
+- uv tree --depth 1 shows only your direct dependencies.
+- check → no issues. (Before uv add, it would fail with Moduled 'django_filters', because settings and views import it.)
+
+uv run python manage.py runserver
+
+Step 2: The browsable API's filter form
+
+Open http://127.0.0.1:8000/api/products/
+- The response is now {"count": 20, "next": ".../?page=2", "previous": null, "results": [...]} with 12 products.
+- There's a Filters button (top right). It shows forms for the, and ordering. That's why django_filters is in INSTALLED_APPS(its templates). Try a few combinations and watch the URL change.
+
+Step 3: Query the API from PowerShell
+
+Window 2. The response is now a single object, not an array, so the PowerShell 5.1 parentheses trick isn't needed:
+$api = "http://127.0.0.1:8000/api"
+
+$r = Invoke-RestMethod "$api/products/"
+$r.count; $r.next; $r.results.Count
+→ 20, http://127.0.0.1:8000/api/products/?page=2, 12
+
+(Invoke-RestMethod "$api/products/?page=2").results | Select-Oble
+→ the remaining 8 products, and next on that page is empty.
+
+(Invoke-RestMethod "$api/products/?search=mug").results | Select-Object name
+→ only Blue Ceramic Mug (the hidden Discontinued mug stays hid
+
+(Invoke-RestMethod "$api/products/?category=kitchen&min_price=e").results | Select-Object name, price
+→ Bamboo Cutting Board 18.00, Glass Storage Jars 22.00, Cast Iron Skillet 39.90: kitchen, in range, cheapest first.
+
+(Invoke-RestMethod "$api/products/?in_stock=false").results | Select-Object name, stock
+→ Linen Cushion Cover, 0
+
+$r = Invoke-RestMethod "$api/products/?ordering=-price&page_si
+$r.results | Select-Object name, price; $r.next
+→ the 3 most expensive, and next keeps all your parameters: .._size=3.
+
+(Invoke-RestMethod "$api/categories/") | Select-Object name, s
+→ still a plain list of 5 (pagination_class = None).
+
+Step 4: The error cases (status codes)                                                                                                           
+curl.exe -s -w "  <- %{http_code}`n" "$api/products/?page=99"                                                                                    curl.exe -s -w "  <- %{http_code}`n" "$api/products/?min_price
+curl.exe -s "$api/products/?ordering=stock" | Select-String -Pattern '"count":\d+' -AllMatches | ForEach-Object { $_.Matches.Value }             - {"detail":"Invalid page."}  <- 404
+- {"min_price":["Enter a number."]}  <- 400: django-filter validated the input.                                                                  - "count":20: ordering=stock was ignored because it's not in oe normal list.
+                                                                                                                                                 Step 5: See the SQL the pipeline builds (optional)
+                                                                                                                                                 uv run python manage.py shell -c "from django.test import Clienection, reset_queries; c = Client(HTTP_HOST='localhost',HTTP_ACCEPT='application/json'); reset_queries(); c.get('/api/products/?category=kitchen&min_price=15&search=board&ordering=price&page_size=2'); [print(q['sql'], '\n') for q in connection.queries]"
+Two queries: a SELECT COUNT(*) ... for count, and the page query with every step visible: INNER JOIN catalog_category, WHERE is_active AND category.slug = 'kitchen' AND price >= 15 AND (name ILIKE '%board%' OR ...), Ohe tie-breaker), LIMIT 2.

@@ -4,6 +4,7 @@ from rest_framework.response import Response
 
 from core.permissions import IsAdminOrReadOnly
 
+from .filters import ProductFilter
 from .models import Category, Product
 from .serializers import CategorySerializer, ProductSerializer
 
@@ -22,6 +23,9 @@ class CategoryViewSet(viewsets.ModelViewSet):
     serializer_class = CategorySerializer
     permission_classes = [IsAdminOrReadOnly]
     lookup_field = 'slug'
+    # Only a handful of categories: return them all as a plain list (no pages),
+    # which is simpler for the frontend's category dropdown.
+    pagination_class = None
 
     def destroy(self, request, *args, **kwargs):
         # A category that still has products is protected (on_delete=PROTECT).
@@ -42,6 +46,14 @@ class ProductViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSerializer
     permission_classes = [IsAdminOrReadOnly]
     lookup_field = 'slug'
+
+    # ?category=kitchen&min_price=10&max_price=50&in_stock=true  (catalog/filters.py)
+    filterset_class = ProductFilter
+    # ?search=mug -> case-insensitive "contains" match in any of these fields
+    search_fields = ['name', 'description', 'category__name']
+    # ?ordering=price, ?ordering=-price, ?ordering=name ... (only these fields are allowed)
+    ordering_fields = ['price', 'name', 'created_at']
+    ordering = ['-created_at']  # default when no ?ordering= is given
 
     def get_queryset(self):
         queryset = super().get_queryset()

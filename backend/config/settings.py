@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # Third-party apps
     'rest_framework',
+    'django_filters',
     # Our apps
     'accounts',
     'catalog',
@@ -131,6 +132,15 @@ REST_FRAMEWORK = {
     # says otherwise (our catalog views use IsAdminOrReadOnly).
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
+    ],
+    # List endpoints return pages: {"count", "next", "previous", "results"}.
+    'DEFAULT_PAGINATION_CLASS': 'core.pagination.StandardPagination',
+    # Query-parameter features available to every view that configures them
+    # (filterset_class / search_fields / ordering_fields).
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'core.filters.StableOrderingFilter',
     ],
 }
 
