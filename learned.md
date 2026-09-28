@@ -5652,3 +5652,160 @@ docker compose exec redis redis-cli LLEN celery
 After a few seconds LLEN → 0, and the email for that order appears in Window 3. Nothing was lost while the worker was down. That's the big advantage of the waiting line: the shop and the worker don't need to be running at the same moment.
 
 (Stop following the log in Window 3 with Ctrl+C when you're done.)
+
+
+
+Quick status: the automated tests are written. All 39 pass in about 2 seconds and exercise 90% of the backend's code. I also checked that the tests never touch your real data or your Redis waiting line. Here's the lesson.
+
+Phase 9: Automated tests for the backend
+
+Lesson 8.2 checkpoint passed: the worker started with transport: redis://redis:6379/0 and our job listed, it caught up on the two waiting emails (#10 and #11), and order #12's note waited while the worker was stopped and was picked up when it came back. Commit 1bce396 is in.
+
+About your log: the emails show up as WARNING/ForkPoolWorker-1. That isn't an error. The "print emails instead of sending" setting writes to the screen, and Celery labels anything a job prints as a warning by default. The real result is on the succeeded line.
+
+🎉 Phase 8 is complete.
+
+What & why
+
+Since Lesson 3 you've checked every feature by hand: run commands, read the output, compare it with what I said it should be. That was the right way to learn, but it doesn't scale. Every time we change something, anything built earlier could quietly break, and nobody is going to repeat 200 manual checks after each change.
+
+Automated tests are small programs that do those checks for us. Each test sets up a situation ("Bob has 2 knives in his cart, but only 1 is left"), does something ("Bob checks out"), and verifies the result ("refused, nothing changed"). You run the whole collection with one command, and within seconds you know whether everything still works. If something broke, the output tells you exactly which behaviour and why. Tests are also the safety net that lets us change code later with confidence, including the Django 5.2 upgrade at the end of the course.
+
+What happens when you run the tests
+
+1. Django creates a separate, empty test database (test_shoplite) next to your real one. Your real products, users, and orders are never touched.
+2. Each test builds just the data it needs (a category, a few products, a customer or two), runs its scenario, and checks the result.
+3. After each test, its changes are undone, so every test starts clean and tests can't affect each other.
+4. When all tests are done, the test database is deleted.
+5. You get a summary: one dot per passing test, and a detailed report for any that fail.
+
+A few special arrangements:
+- No real emails are queued. Checkout normally drops a note into Redis. In the tests that step is replaced by a stand-in that only records that it was asked to queue the email for the right order. So tests never fill your real Redis line or make the worker send emails about orders that don't exist. (I confirmed the line was still empty after the run.)
+- The email itself is tested directly: the test runs the "send confirmation" job without any worker, and Django collects the email in a tray inside the test instead of printing it. The test then checks the recipient, the subject, and the order lines.
+- Faster passwords during tests only. Real password protection is deliberately slow (870,000 rounds, Lesson 2.6) to stop attackers guessing. Tests create many users, so while tests run a quick version is used. It's never used outside tests.
+
+What the 39 tests check
+
+Area: Catalog (12)
+What's verified: Only visible products are listed, in pages; category/price filters, search, and "in stock" work; a bad filter value gives 400; hidden
+products are "not found" for the public but visible to admins; anonymous users get 401 and customers 403 when creating products; admins can create them
+(with an automatic web name); a duplicate name gives a clear error instead of a crash; a category with products can't be deleted (409) but an empty one
+can; an image over 2 MB is refused
+────────────────────────────────────────
+Area: Accounts (8)
+What's verified: Registration lowercases the email, ignores "make me staff", never returns the password, and stores it protected; weak passwords and
+duplicate emails (any capitalisation) are refused; login works with any capitalisation; a wrong password gives 401; a real login token opens /me; /me
+needs login and can't change role or email
+────────────────────────────────────────
+Area: Cart (7)
+What's verified: Login required; adding the same product twice raises the quantity (one line, correct total); stock limits (with the "you already have 3"
+message); out-of-stock and hidden products are refused; another customer's cart line is "not found"; a product hidden after adding shows an issue on the
+line; emptying the cart
+────────────────────────────────────────
+Area: Orders (12)
+What's verified: Checkout creates a pending order with the right total, reduces stock, empties the cart, and queues the email for that order; the order
+keeps its price when the product's price changes later; empty cart and not-enough-stock are refused with nothing changed; a crash halfway  leaves nothing
+ behind; customers only see their own orders; cancelling returns the stock exactly once; no cancelling after payment; admins must follow the status
+steps; customers can't change statuses; the confirmation email content; two customers buying the last item at the  same instant: exactly one succeeds and
+ stock ends at 0
+
+That last test is the race from Lesson 7.3, now automated. It really runs two customers at the same moment, each with its own connection to the test database, which is why it runs a little differently from the others.
+
+What I added
+
+- A tests.py in each app (accounts, catalog, cart, orders), replacing the empty ones startapp created
+- A small shared helper file (core/testing.py) with shortcuts for creating test users, categories, and products
+- The "fast passwords during tests" setting
+- Settings for coverage in pyproject.toml (explained in Step 3)
+
+---
+
+▶️ Your turn
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+(The API server doesn't need to be running. Tests use their own database and fake requests. PostgreSQL in Docker must be running.)
+
+Step 1: Run all the tests
+
+uv run python manage.py test
+Expected:
+Creating test database for alias 'default'...
+Found 39 test(s).
+System check identified no issues (0 silenced).
+.......................................
+----------------------------------------------------------------------
+Ran 39 tests in 1.9s
+
+OK
+Destroying test database for alias 'default'...
+One dot per passed test. Run it with more detail to see each test's name:
+uv run python manage.py test -v 2
+You'll see lines like test_last_item_is_sold_only_once (orders.tests.LastItemRaceTests...) ... ok. The test names are written as plain sentences on purpose, so the list reads like a description of how the shop behaves.
+
+You can also run just one app's tests:
+uv run python manage.py test orders
+
+Step 2: Break something on purpose, and let the tests catch it
+
+This is the real value of tests. Open backend\orders\models.py and find the allowed status changes. Change the pending line so an order may jump straight to delivered:
+        Status.PENDING: {Status.PAID, Status.CANCELLED, Status.DELIVERED},
+Save, and run the order tests:
+uv run python manage.py test orders
+Now you'll see an F instead of a dot, and a report like:
+FAIL: test_admin_follows_allowed_status_steps (orders.tests.OrderManagementTests...)
+...
+AssertionError: 200 != 400
+----------------------------------------------------------------------
+Ran 12 tests in ...
+FAILED (failures=1)
+How to read it: the report names the behaviour that broke ("admin follows allowed status steps") and what went wrong: the shop answered 200 (allowed) where 400 (refused) was expected. Read the lines just above the error and you'll see which step. Nobody had to remember to test that by hand.
+
+Undo the change using Git (it restores the file to the last committed version):
+git restore orders/models.py
+uv run python manage.py test orders
+→ OK again.
+
+Step 3: Coverage (which parts of the code the tests actually run)
+
+Coverage is a tool that watches the tests run and reports which lines of our code were used. Lines that no test runs are lines where a bug could hide unnoticed. Coverage is only needed while developing, not by the running shop, so we install it as a development-only package:
+uv add --dev coverage
+git diff pyproject.toml
+The diff shows coverage in a separate [dependency-groups] dev section, not in the main list. That matters: the worker's Docker recipe installs with "no development packages" (Lesson 8.2), so coverage never ends up in the worker. Only your machine gets it.
+
+Now run the tests under coverage, then show the report:
+uv run coverage run manage.py test
+uv run coverage report
+You'll get a table per file, ending with roughly TOTAL ... 90%. The Missing column lists the line numbers no test reached. Most of the gaps are admin-screen details and the seed command, which we checked by hand. The core business rules (serializers, views, the checkout and status logic) are at 94–100%. Aiming for 100% everywhere isn't the goal. The important rules being covered is.
+
+Optionally, for a clickable report in the browser:
+uv run coverage html
+start htmlcov\index.html
+Click a file: lines run by tests are green, and missed ones are red. (.coverage and htmlcov\ are already ignored by Git.)
+
+Step 4: Commit
+
+uv run python manage.py test orders
+→ OK again.
+
+Step 3: Coverage (which parts of the code the tests actually run)
+
+Coverage is a tool that watches the tests run and reports which lines of our code were used. Lines that no test runs are lines where a bug could hide unnoticed. Coverage is only needed while developing, not by the running shop, so we install it as a development-only package:
+uv add --dev coverage
+git diff pyproject.toml
+The diff shows coverage in a separate [dependency-groups] dev section, not in the main list. That matters: the worker's Docker recipe installs with "no development packages" (Lesson 8.2), so coverage never ends up in the worker. Only your machine gets it.
+
+Now run the tests under coverage, then show the report:
+uv run coverage run manage.py test
+uv run coverage report
+You'll get a table per file, ending with roughly TOTAL ... 90%. The Missing column lists the line numbers no test reached. Most of the gaps are admin-screen details and the seed command, which we checked by hand. The core business rules (serializers, views, the checkout and status logic) are at 94–100%. Aiming for 100% everywhere isn't the goal. The important rules being covered is.
+
+Optionally, for a clickable report in the browser:
+uv run coverage html
+start htmlcov\index.html
+Click a file: lines run by tests are green, and missed ones are red. (.coverage and htmlcov\ are already ignored by Git.)
+│  denied to create database                          │ databases                                    │ DB_USER in .env                                │
+├─────────────────────────────────────────────────────┼──────────────────────────────────────────────┼────────────────────────────────────────────────┤
+│ database "test_shoplite" already exists and a       │ A previous test run was interrupted and      │ Type yes (it's only the test copy), or run     │
+│ question Type 'yes'                                 │ didn't clean up                              │ with --noinput                                 │
+├─────────────────────────────────────────────────────┼──────────────────────
+---
