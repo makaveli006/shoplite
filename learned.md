@@ -6189,3 +6189,137 @@ git commit -m "React Router: layout with header, pages for home, products, produ
 
 ---
 
+
+
+
+touched. Here's the lesson.
+
+Phase 11, Lesson 11.2: Loading real products from the API
+
+Lesson 11.1 checkpoint passed: react-router@8.4.0 is installed and commit ba95784 is in. (By the way, the audited 431 packages is expected. shadcn's setup tool added itself and its helpers to the project in Lesson 10.2, and all 431 packages together still have 0 vulnerabilities.)
+
+What & why
+
+The product page is still a placeholder. Now the frontend starts talking to Django. It fetches the real product list and shows it as a grid of cards, with search, category, price range, sorting, and pages, just like a real shop.
+
+Fetching data in a browser app sounds simple ("ask the server, show the answer"), but a good shop has to handle much more:
+- Waiting. The answer takes a moment. The page should show something sensible meanwhile (grey placeholder cards), not a blank space.
+- Failure. If the server is down, show a clear message and a "Try again" button, not a broken page.
+- Nothing found. "No products match your filters", with a quick way out.
+- Remembering. If you go to page 2 and back to page 1, the shop shouldn't make you wait for page 1 again.
+- Staying fresh. Remembered data can get old (an admin changes a price), so it should be re-checked quietly in the background.
+- No flashing. When you switch to page 2, page 1 should stay visible (slightly faded) until page 2 has arrived, instead of the grid disappearing and reappearing.
+
+We use two tools for this:
+- Axios makes the actual requests to the API. We set it up once with the API's address, so every part of the frontend uses the same connection. In Phase 12 we'll teach this one place to add the login token automatically.
+- TanStack Query handles everything in the list above: waiting, errors, remembering, re-checking, and no flashing. Each piece of data gets a name (for example "products, Kitchen, cheapest first, page 1"), and TanStack Query stores the result under that name. Ask for the same name again and you get it instantly from memory.
+
+What happens now on the product page
+
+- The filters live in the web address, for example /products?category=kitchen&ordering=price&page=2. Choosing a category or sort order updates the address, and the address decides what's shown. That's why you can bookmark or share a search, why Back undoes a filter change, and why refreshing keeps your filters.
+- Category and sort apply immediately. Search text and prices apply when you press Enter or Search. That avoids sending a request for every letter typed.
+- Changing any filter jumps back to page 1, because page 3 of a new search may not exist.
+- First visit: six grey card shapes appear, then the real cards: picture (or a "no image" icon), category, name, and price in your currency. Products with 0 stock get an Out of stock label.
+- Next/Previous: the current page stays visible, slightly faded, until the new one arrives. "Page 1 of 2" is calculated from the total count the API returns.
+- Coming back to a page or search you've already seen: it appears instantly from memory. If it's more than 30 seconds old, it's also quietly re-checked, and the cards update if something changed.
+- Server down: after one automatic retry, you get "Couldn't load the products. Cannot reach the shop server. Is the backend running?" and a Try again button. If the server clearly says no (for example "page doesn't exist"), it doesn't retry pointlessly.
+- No results: "No products match your filters." with a Clear filters button.
+- Only visible products appear. The hidden "Discontinued Travel Mug" doesn't, because the API decides that (Lesson 4.3), not the frontend.
+
+What I built
+
+- The API connection (Axios): the address comes from a new frontend\.env file, like the backend's settings. There's also a helper that turns any connection problem into a short, readable message.
+- The data shapes: a description of what a product, a category, and a "page of results" look like, matching the backend's JSON. TypeScript can now warn us if we misuse them.
+- The data layer (TanStack Query): "get a page of products for these filters", "get one product" (for Lesson 11.3), and "get all categories" (reused for 5 minutes, since they rarely change). Plus the shared memory, set to re-check data older than 30 seconds, and a developer panel that lets you look inside that memory. The panel only appears while developing, never in the real shop.
+- The product list page: the filter bar, product cards, grey placeholder cards, error and empty messages, and page buttons.
+- Price display in your currency: prices come from the API as exact text like "12.50" (Lesson 4.1), and the page formats them for display, like $12.50. The currency is a setting in .env: USD by default, but you can use EUR, GBP, INR, or any other.
+
+---
+
+▶️ Your turn
+
+Step 1: Install the two libraries
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\frontend"
+npm install axios @tanstack/react-query
+npm install -D @tanstack/react-query-devtools
+The -D means "only needed while developing" (npm's version of uv add --dev from Phase 9). You should get axios 1.20 and @tanstack/react-query 5.104.
+
+Step 2: Create the frontend's settings file
+
+Copy-Item .env.example .env
+Get-Content .env
+It contains the API address http://127.0.0.1:8000/api and VITE_CURRENCY=USD. Change the currency code to yours if you like (for example INR or EUR).
+
+Two rules about this file that differ from the backend's .env:
+- Only settings starting with VITE_ reach the frontend code. That's a safety rule, so other things on your machine can't leak in by accident.
+- It must never contain secrets. Everything in the frontend is sent to the customer's browser, where anyone can read it.
+
+The file is ignored by Git (like backend\.env), and .env.example is committed.
+
+Step 3: Start both servers
+
+Window 1 (backend), if it isn't running:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py runserver
+Window 2 (frontend):
+npm run dev
+Vite reads .env only when it starts. If you change .env later, restart it.
+
+Step 4: Browse the real catalog
+
+Open http://localhost:5173/products:
+1. For a split second there are grey card shapes, then 12 real products. It says 20 products, and at the bottom Page 1 of 2. Your uploaded photos appear on the mug, knife, pen set, pot, and mouse. The Linen Cushion Cover has an Out of stock label.
+2. Category → Kitchen. The address becomes ?category=kitchen, and you see 5 products.
+3. Sort → Price: low to high. The address gets &ordering=price, and the mug (the cheapest) comes first.
+4. Clear the filters, type mug in the search box, and press Enter: only the Blue Ceramic Mug. Now type zzz and search: "No products match your filters." Click Clear filters.
+5. Set Min price 10 and Max price 20, then press Search: only products in that range.
+6. Go to Next (page 2) and back to Previous.
+7. Press the browser's Back button several times. Each press undoes one step, and the filter bar shows the matching values each time.
+8. Copy the address of a filtered search, open a new tab, and paste it. You get the same results. That's a shareable search.
+
+Step 5: Watch the memory at work
+
+Press F12 → Network tab → click Fetch/XHR, so only API requests are listed.
+1. Click Next (a request for ?page=2 appears), then Previous. Page 1 appears instantly and no new request appears if you're within 30 seconds. It came from memory.
+2. Click ShopLite (home), then Products again. It's instant again.
+3. Wait more than 30 seconds, then switch to another browser tab and back. A request quietly appears: the stale page is being re-checked in the background while you see the remembered one.
+4. Click the small flower icon at the bottom left. That's TanStack Query's developer panel. It lists everything in memory, for example ["products", {"category":"kitchen", ...}] and ["categories"], each marked fresh or stale. Click one to see the exact data the API returned. Close the panel with the same icon.
+
+Step 6: See the error handling
+
+In Window 1, stop Django with Ctrl+C. In the shop, change the category (so it needs new data). After a moment (one automatic retry), you get:
+
+▎ Couldn't load the products. Cannot reach the shop server. Is the backend running?  [Try again]
+
+Start Django again (uv run python manage.py runserver) and click Try again. The products come back.
+
+Step 7: Build and commit
+
+Stop the dev server, then:
+npm run build
+cd ..
+git status
+git add frontend
+git commit -m "Product list from the API: Axios, TanStack Query, filters in the URL, pagination, loading/error/empty states"
+- The build may print a note that one output file is larger than 500 kB. That's only a size suggestion, not an error, and we'll look at it before deploying.
+- In git status, confirm that frontend/.env is not listed, but frontend/.env.example is.
+
+---
+
+❓ If something goes wrong
+{"category":"kitchen", ...}] and ["categories"], each marked fresh or stale. Click one to see the exact data the API returned. Close the panel with the same icon.
+
+Step 6: See the error handling
+
+In Window 1, stop Django with Ctrl+C. In the shop, change the category (so it needs new data). After a moment (one automatic retry), you get:
+
+▎ Couldn't load the products. Cannot reach the shop server. Is the backend running?  [Try again]
+
+Start Django again (uv run python manage.py runserver) and click Try again. The products come back.
+
+│ Pictures don't appear, but products do  │ Django isn't serving media files (it must run with            │ Check backend\.env (Lesson 3.5)          │
+│                                         │ DJANGO_DEBUG=True)                                            │                                          │
+├─────────────────────────────────────────┼───────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ Error overlay: Failed to resolve import │ Step 1 wasn't done                                            │ Run it in frontend\                      │
+│  "@tanstack/react-query"                │
