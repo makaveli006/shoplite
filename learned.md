@@ -4544,3 +4544,176 @@ Here curl pretends to be a page from each origin. -D - prints the response heade
 - From evil.example: 200 OK and no access-control header, so a real browser on that site would block the answer
 
 Stop the test page server (Window 2) with Ctrl+C. The API can keep running.
+
+
+
+Phase 6, Lesson 6.1: Designing the cart
+
+🎉 Phase 5 is complete, and commit 17337d8 (CORS) is in. Glad the explanation style works. I'll keep it this way.
+
+What & why
+
+Customers can now log in and browse products, but they can't collect anything to buy. The next step toward checkout is a shopping cart. In this lesson we decide how the cart works and create the cart app. I'll write the models in the next lesson, the same way we did for the catalog in Phase 3.
+
+Files involved
+backend/
+├── cart/                  ← NEW app: YOU create it with startapp (this lesson)                                                                            │   └── models.py          ←   Cart + CartItem (next lesson)
+└── config/settings.py     ← YOU add 'cart' to INSTALLED_APPS (this lesson)                                                                               
+The design, in plain language                                                                                                                             
+One cart per customer, stored in the database. Each user gets exactly one cart, linked to their account. Because it lives in PostgreSQL and not in the     browser, a customer who adds a mug on their laptop sees it in . The link is a one-to-one relationship: one user has one cart, and one cart belongs to one user. That's a stricter version of the one-to-many ForeignKey you used for products and categories in Lesson 3.1. The cart     isn't created at registration. It's created automatically the  at it or adds something ("get it, or create it if it doesn'texist yet").                                                                                                                                              
+The cart holds "cart items", not products directly. A cart can contain many products, and each needs a quantity, so there's a second table: CartItem. Each row says "this cart contains this product, this many times." Amany, like category → products). Each item points to oneproduct.                                                                                                                                                  
+Each product appears at most once per cart. If you add the mug twice, the existing row's quantity goes from 1 to 2, instead of a second "mug" row          appearing. We'll enforce this with a unique rule on the pair (SQL itself, the same idea as the unique slug from Lesson 3.3.Even two very fast clicks can't create a duplicate. Quantity must be at least 1, and that's also enforced by the database, like the price rule from Lesson 3.3. To remove a product, you delete the item rather than sett
+
+The cart doesn't store prices. A cart always shows the productrom the catalog. If an admin changes a price, carts show thenew price immediately. Prices are only "frozen" at checkout, when an order is created (Phase 7, the "price snapshot" from the plan).
+
+What happens when things change underneath the cart:
+
+┌──────────────────────────────────────┬────────────────────────────────────────────────────┬────────────────────────────────────────────────────────┐
+│              Situation               │                   Wha │                          Why                           │
+├──────────────────────────────────────┼────────────────────────────────────────────────────┼────────────────────────────────────────────────────────┤
+│ The customer's account is deleted    │ Their cart and its it │ A cart is worthless without its owner                  │
+├──────────────────────────────────────┼────────────────────────────────────────────────────┼────────────────────────────────────────────────────────┤
+│ A product is deleted                 │ It disappears from ev │ A cart row pointing at nothing makes no sense. (Unlike │
+│                                      │                                                    │  orders, a cart isn't history worth keeping.)          │
+├──────────────────────────────────────┼───────────────────────┼────────────────────────────────────────────────────────┤
+│ A product is hidden                  │ The item stays, but the API marks it as            │ The customer should see why something can't be bought, │
+│ (is_active=False) or its stock drops │ unavailable or over s │  instead of it silently vanishing                      │
+├──────────────────────────────────────┼────────────────────────────────────────────────────┼────────────────────────────────────────────────────────┤
+│ The customer adds more than is in    │ Rejected with a clear │ Catch the problem as early as possible                 │
+│ stock                                │  adding                                            │                                                        │
+└──────────────────────────────────────┴───────────────────────┴────────────────────────────────────────────────────────┘
+
+Only logged-in customers have carts. Many real shops also let t (kept in the browser) and merge it into their account atlogin. That's a lot of extra complexity, so for this course the "Add to cart" button asks you to log in first. We planned that already for the product
+page in Phase 11.
+
+Who can see what: a customer only ever sees and changes their in the URLs. The API finds "my cart" from the login token,exactly like /api/auth/me/ finds "me" in Lesson 5.2. So nobody can even try to open someone else's cart.
+
+The endpoints we'll build (Lesson 6.3):
+
+┌──────────────────────────────┬──────────────────────────────────────────────────────────────────────────┐
+│           Endpoint           │                                             │
+├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+│ GET /api/cart/               │ My cart: the items with produthe cart total │
+├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+│ POST /api/cart/items/        │ Add a product (or increase itere)           │
+├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+│ PATCH /api/cart/items/<id>/  │ Change an item's quantity                   │
+├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+│ DELETE /api/cart/items/<id>/ │ Remove an item                              │
+├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+│ DELETE /api/cart/            │ Empty the whole cart                        │
+└──────────────────────────────┴──────────────────────────────────────────────────────────────────────────┘
+
+---
+
+▶️ Your turn
+
+Step 1: Create the app
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py startapp cart
+Get-ChildItem cart
+You'll see the familiar structure from accounts and catalog: m, models.py, tests.py, views.py.
+
+Step 2: Register it
+
+In backend\config\settings.py, add 'cart', under our other app
+    # Our apps                                                                                                                                              'accounts',
+    'catalog',                                                                                                                                              'cart',
+]                                                                                                                                                       
+Step 3: Verify                                                                                                                                          
+uv run python manage.py check                                                                                                                           uv run python manage.py shell -c "from django.apps import appss.get_app_configs()][-4:])"
+Expect no issues and ['corsheaders', 'accounts', 'catalog', 'cart'].                                                                                    
+Don't commit yet. The app gets committed together with its models in the next lesson.                                                                   
+---                                                                                                                                                     
+✅ Checkpoint                                                                                                                                           
+Paste the output of Step 3. If you have questions about any of the design decisions above (for example, why products are deleted from carts but will be kept in orders), ask them now, before they turn into code.
+
+Next: Lesson 6.2, the cart models and migration. I write Cart te the migration, look at the unique and "quantity ≥ 1" rulesin the SQL, apply it, and register both models in the admin so you can see carts there.
+
+
+
+
+Phase 6, Lesson 6.2: The cart models, migration, and admin
+
+Checkpoint passed: ['corsheaders', 'accounts', 'catalog', 'cart']. (The usage: ... unrecognized arguments: . error was the trailing dot again. This time Django's argument parser caught it and told you exactly which argument it didn't understand.)
+
+What & why
+
+We turn the design from Lesson 6.1 into real tables and make carts visible in the admin, so you can inspect them before the API exists.
+
+Files involved (written; check passes and the migration preview is correct)
+backend/cart/
+├── models.py   ← ✏️ Cart and CartItem
+└── admin.py    ← ✏️ carts in the admin, with their items shown as a table inside each cart
+
+What I wrote
+
+Cart links to the user with a one-to-one field. It's like the ForeignKey you know from Product → Category, except the database also guarantees that no user can have two carts. I pointed it at settings.AUTH_USER_MODEL, which is the "refer to the user model through the setting" rule from Lesson 2.5, so it follows our custom accounts.User. The related name cart means you can write some_user.cart to reach a user's cart. It's set to be deleted together with the user.
+
+CartItem has two ordinary foreign keys: one to its cart (so cart.items lists the items) and one to a product. Both use cascade deletion, meaning "if the parent row goes, remove this row too." That's the opposite choice from categories, which used PROTECT (Lesson 3.1), and it matches the design decision that deleting a product should remove it from carts. The quantity must be at least 1, checked twice, in the same two layers you saw for prices in Lesson 3.3: a validator for friendly error messages in forms and the API, and a database CHECK rule as the safety net. A second database rule, a unique constraint on (cart, product), makes it impossible to have the same product twice in one cart.
+
+Two small calculated values, line_total on an item (price × quantity) and total on the cart (the sum of all lines), are written as properties: values computed on the fly each time you ask, never stored. That's how the cart always reflects the current product price. The total starts from Decimal('0.00'), so an empty cart shows 0.00 instead of a plain 0, and money stays in exact decimals (Lesson 3.1).
+
+The admin shows each cart with its owner, number of items, and total. Opening a cart shows its items as a small inline table you can edit, with the same product search box you used for categories. I applied both performance lessons from Phase 3 right away: the item count is computed inside the same database query, with an explicit sort order (the GROUP BY ordering trap from Lesson 3.5), and all items and their products are loaded in one extra query, so the "total" column doesn't cause the N+1 problem (Lesson 3.6).
+
+---
+
+▶️ Your turn
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+
+Step 1: Generate and inspect the migration
+
+uv run python manage.py makemigrations cart
+uv run python manage.py sqlmigrate cart 0001
+In the SQL, find:
+- "user_id" bigint NOT NULL UNIQUE: the one-to-one is simply a foreign key that must be unique
+- "quantity" integer NOT NULL CHECK ("quantity" >= 0) and CONSTRAINT "cart_item_quantity_at_least_1" CHECK ("quantity" >= 1). The first comes automatically from "positive integer" and allows 0; the second is our stricter rule.
+- CONSTRAINT "unique_product_per_cart" UNIQUE ("cart_id", "product_id")
+- FOREIGN KEY ... REFERENCES "catalog_product" without any "ON DELETE CASCADE". Just like PROTECT in Lesson 3.3, Django performs cascades itself in Python, before it deletes the parent row.
+
+Step 2: Apply it
+
+uv run python manage.py migrate
+→ Applying cart.0001_initial... OK
+
+Step 3: Play with it in the admin
+
+uv run python manage.py runserver
+Open http://127.0.0.1:8000/admin/. There's a new CART section with Carts.
+1. Add cart + → choose the user customer@example.com. In the Cart items table below, add two rows: Blue Ceramic Mug, quantity 2, and Gel Pen Set, quantity 1. Save and continue editing. The Total field now shows 32.99 (2 × 12.50 + 7.99), and each row shows its line total.
+2. Duplicate test: add a third row with Blue Ceramic Mug again and save → "Please correct the duplicate data for product, which must be unique." The unique rule caught it before the database even had to.
+3. Quantity test: set a quantity to 0 and save → "Ensure this value is greater than or equal to 1."
+4. One cart per user: go back to Carts → Add cart +, choose customer@example.com again, and save → "Cart with this User already exists." That's the one-to-one rule.
+5. The cart list shows customer@example.com | 2 | 32.99.
+
+Step 4: Explore it in the shell, and watch the cascade
+
+Stop the server (or use another window):
+uv run python manage.py shell
+from accounts.models import User
+from catalog.models import Category, Product
+
+customer = User.objects.get(email='customer@example.com')
+cart = customer.cart
+cart.items.all()
+[(item.product.name, item.quantity, item.line_total) for item in cart.items.all()]
+cart.total
+- customer.cart goes from the user to their cart through the one-to-one link.
+- The list shows each line with its total, and cart.total → Decimal('32.99').
+
+Now create a throw-away product, put it in the cart, and delete the product:
+temp = Product.objects.create(category=Category.objects.get(slug='kitchen'), name='Temporary Spoon', price='2.00', stock=5)
+cart.items.create(product=temp, quantity=3)
+cart.items.count()
+cart.total
+temp.delete()
+cart.items.count()
+cart.total
+exit()
+- After adding the spoon: 3 items and a total of 38.99.
+- temp.delete() prints something like (2, {'catalog.Product': 1, 'cart.CartItem': 1}): Django deleted the product and, because of the cascade rule, the cart item pointing at it.
+- Afterwards the cart is back to 2 items and 32.99.
+
+Compare this with Lesson 3.6, where deleting a category that still had products raised ProtectedError. Same kind of relationship, opposite rule, chosen for a different business need.
