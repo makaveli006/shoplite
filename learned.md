@@ -5949,3 +5949,109 @@ Get-ChildItem dist, dist\assets
 The build first runs TypeScript's full check of every file. If anything is wrong, it stops here, which is another safety net. Then Vite produces a dist folder with an index.html and a few files in dist\assets with odd names like index-Cx8a2.js. These are all our code and React squeezed into a few small files. The random part of the name changes whenever the content changes, so browsers always fetch the newest version. This folder is what you'd upload to a web host. It's ignored by Git, because it can always be rebuilt.
 
 (Optional: npm run preview serves that finished dist folder at http://localhost:4173, so you can check the production version. Ctrl+C to stop.)
+
+
+
+Phase 10, Lesson 10.2: Tailwind CSS and shadcn/ui (styling and ready-made components)
+
+Lesson 10.1 checkpoint passed: react 19.2.8, vite 8.3.1, typescript 6.0, hot reload worked (hmr update /src/App.tsx), and the build produced dist\assets. Commit 99dcce2 is in.
+
+First: your first npm i ran in a different project
+
+PS ...\django-ecommerce> npm i
+up to date, audited 152 packages ... 13 vulnerabilities (12 high, 1 critical)
+You ran it in the project root, where there's no package.json. When npm doesn't find one in the current folder, it walks up the parent folders until it finds one. I checked: it found C:\Users\subin\package.json, an unrelated project in your user folder. It reported that project as "up to date" and changed nothing, so no harm was done. Those 13 vulnerabilities belong to that other project, not ShopLite. Ours, installed next inside frontend\, reported 0 vulnerabilities.
+
+It's the same trap as uv outside backend\ (Lesson 2.2). So from now on: npm commands always from frontend\, uv commands always from backend\. (If you don't know what's in C:\Users\subin\package.json, it's worth a look some time. It may be left over from an old experiment.)
+
+---
+
+What & why
+
+The starter page has its own hand-written styles. For a real shop we need two things:
+1. A fast, consistent way to style anything. That's Tailwind CSS. Instead of writing separate style files, you describe the look directly on each element with short words: "padding 4", "bold text", "rounded corners", "grey background", "three columns on wide screens, one on phones". Tailwind has thousands of these small words, all following one consistent scale of sizes and colours, so the whole shop automatically looks coherent. When you build the final files, only the words you actually used are included, so the styles stay tiny.
+2. Ready-made interface pieces (buttons, cards, text inputs, dropdowns, pop-up dialogs, notifications, tables) that look good and behave correctly. That's shadcn/ui, built on Radix UI:
+   - Radix UI handles the hard, invisible parts that are easy to get wrong: a pop-up dialog traps the keyboard inside it and closes with Esc, a dropdown can be operated with arrow keys, and screen readers for blind users announce everything properly. This is called accessibility, and many shops fail at it.
+   - shadcn/ui adds a clean, modern look on top, using Tailwind. Unlike a normal library, it copies each component's source file into our project. They become our files, and we can open and change any of them. There's no hidden library to fight with.
+
+What happens in this lesson
+
+1. You install Tailwind.
+2. You run shadcn's setup tool. It checks the project (Vite, Tailwind 4, the @ shortcut), saves its settings in a small file (components.json), installs its helpers (Radix, an icon set, a font), creates one small helper file, and adds the theme to our main style file: the shop's colour palette (background, text, "primary" button colour, borders, …) as named values. Every component uses those names, so changing one colour there changes it everywhere.
+3. You add the components we'll need throughout the shop. Eleven files appear in src\components\ui\, one per component.
+4. You start Vite and see a new ShopLite welcome page built from those components: a header with navigation and a cart button, a welcome section, and three feature cards. The buttons don't do anything yet. Navigation and real data come in Phase 11.
+
+What I changed
+
+- Connected Tailwind to Vite, so Vite applies Tailwind's styles automatically while you work.
+- Set up the @ shortcut in Vite's and TypeScript's settings. Anywhere in the frontend, @/components/ui/button means "the button file in src", however deep the current file is. Without it, imports become long chains like ../../../components/ui/button. shadcn requires this shortcut. (Older guides also show an extra "baseUrl" setting there. TypeScript 6 no longer needs it and warns about it, so I left it out.)
+- Replaced the starter styles with Tailwind (the main style file now just says "use Tailwind", and shadcn adds the theme to it).
+- Removed the starter page's leftovers: its style file, pictures, and icons.
+- Wrote the new welcome page, and renamed the browser tab from "frontend" to "ShopLite".
+- I verified all of this in a separate trial project with the same versions: shadcn's setup found Vite, Tailwind v4, and the shortcut, and the welcome page built without errors.
+
+---
+
+▶️ Your turn
+
+Pause OneDrive again (several packages are installed), and stop any running npm run dev.
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\frontend"
+
+Step 1: Install Tailwind
+
+npm install tailwindcss @tailwindcss/vite
+Two packages: Tailwind itself, and its connector for Vite.
+
+Step 2: Set up shadcn/ui on top of Radix
+
+npx shadcn@latest init -b radix -p nova --no-monorepo -y
+What the options mean: -b radix means "build on Radix UI" (the plan's choice; shadcn also offers other foundations), -p nova picks the Nova look (with the Lucide icon set and the Geist font), --no-monorepo means "this is a normal single project", and -y means "don't ask for confirmation."
+
+You'll see a checklist of green ticks:
+√ Verifying framework. Found Vite.
+√ Validating Tailwind CSS. Found v4.
+√ Validating import alias.
+√ Writing components.json.
+√ Installing dependencies.
+√ Created 1 file:
+  - src\lib\utils.ts
+√ Updating src\index.css
+Project initialization completed.
+If you're curious, open src\index.css: below the Tailwind line there are now two blocks of colour values, one for light mode and one for dark mode. That's the theme.
+
+Step 3: Add the components we'll use
+
+npx shadcn@latest add button card input label badge select dialog sonner table skeleton separator -y
+Get-ChildItem src\components\ui
+→ Created 11 files, one per component: button, card, input, label, badge, select, dialog, sonner (pop-up notifications), table, skeleton (grey placeholder shapes while data loads), and separator (a thin dividing line). Open button.tsx if you like. It's ordinary code inside our project that we're free to change.
+
+Step 4: See the new welcome page
+
+npm run dev
+Open http://localhost:5173:
+- The browser tab says ShopLite.
+- There's a white header with ShopLite, Products, Sign in, and a cart icon button.
+- A grey badge says Coming soon, above a large Welcome to ShopLite heading, a short description, and two buttons (solid and outlined).
+- Three cards with icons: Hand-picked products, Order tracking, Secure checkout.
+
+Try these:
+- Hover and click with the keyboard: press Tab repeatedly. Each button gets a visible focus ring as you move through them. That's the accessibility work built into the components.
+- Make the window narrow, or open DevTools (F12) → the phone icon. The three cards stack vertically on small screens and sit side by side on wide ones. That behaviour is one Tailwind word on the card grid ("three columns from small-screen size upward").
+
+Step 5: Change the look with Tailwind (instant)
+
+With the page still open, edit src\App.tsx:
+1. Find bg-muted/40 (on the first line inside return) and change it to bg-amber-50. Save. The whole page background turns a warm cream colour immediately.
+2. Find text-4xl in the "Welcome to ShopLite" heading and change it to text-6xl. Save. The heading grows.
+
+Change both back (bg-muted/40, text-4xl) and save. No style files, no reloads: you change a word on the element and see the result.
+
+Step 6: Check the production build
+
+Stop the dev server (Ctrl+C), then:
+npm run build
+TypeScript checks every file, including the eleven new components, and Vite builds. It ends with ✓ built in ..., and you'll notice a few font files (geist-...woff2) in the output. That's the Nova look's font, now shipped with our shop instead of being loaded from someone else's server.
+
+(If you run npm run lint, you'll see two warnings about button.tsx and badge.tsx. They're harmless notes about how those shadcn files are organised, not errors, and we'll leave the files as shadcn made them.)
+
+Step 7: Resume OneDrive and commit

@@ -1,122 +1,78 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { ShieldCheck, ShoppingBag, ShoppingCart, Truck } from 'lucide-react'
 
-function App() {
-  const [count, setCount] = useState(0)
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 
+const features = [
+  {
+    icon: ShoppingBag,
+    title: 'Hand-picked products',
+    text: 'Kitchen, stationery, home and garden, electronics and books.',
+  },
+  {
+    icon: Truck,
+    title: 'Order tracking',
+    text: 'Follow every order from pending to paid, shipped and delivered.',
+  },
+  {
+    icon: ShieldCheck,
+    title: 'Secure checkout',
+    text: 'Your cart is checked again at checkout, so you never pay for an item that is gone.',
+  },
+]
+
+export default function App() {
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
+    <div className="min-h-screen bg-muted/40">
+      <header className="border-b bg-background">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
+          <span className="text-xl font-bold tracking-tight">ShopLite</span>
+          <nav className="flex items-center gap-2">
+            <Button variant="ghost">Products</Button>
+            <Button variant="ghost">Sign in</Button>
+            <Button variant="outline" size="icon" aria-label="Cart">
+              <ShoppingCart />
+            </Button>
+          </nav>
         </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
+      </header>
+
+      <main className="mx-auto max-w-5xl px-4 py-12">
+        <section className="flex flex-col items-center gap-4 text-center">
+          <Badge variant="secondary">Coming soon</Badge>
+          <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">Welcome to ShopLite</h1>
+          <p className="max-w-xl text-muted-foreground">
+            A small shop built step by step with Django, React, PostgreSQL and Celery.
           </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+          <div className="flex gap-3">
+            <Button size="lg">Browse products</Button>
+            <Button size="lg" variant="outline">
+              Create an account
+            </Button>
+          </div>
+        </section>
 
-      <div className="ticks"></div>
+        <Separator className="my-12" />
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+        <section className="grid gap-4 sm:grid-cols-3">
+          {features.map(({ icon: Icon, title, text }) => (
+            <Card key={title}>
+              <CardHeader>
+                <Icon className="size-6 text-primary" />
+                <CardTitle>{title}</CardTitle>
+                <CardDescription>{text}</CardDescription>
+              </CardHeader>
+              <CardContent />
+            </Card>
+          ))}
+        </section>
+      </main>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      <footer className="border-t bg-background py-6 text-center text-sm text-muted-foreground">
+        ShopLite - a learning project
+      </footer>
+    </div>
   )
 }
-
-export default App
