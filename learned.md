@@ -4860,3 +4860,207 @@ Step 7: Empty the cart
 
 Send-Json DELETE "$api/cart/" -Headers $bob
 → 200 with an empty cart. Open Carts in the admin: Bob's cart still exists, with 0 items and a fresh updated at time.
+
+
+
+
+
+🎉 Phase 6 (the cart) is complete. Every result matched: 201 then 200 for the same line, all four 400 messages, 404 for Bob touching the customer's cart, and the "no longer available" issue while the knife was hidden. Commit 7b92497 is in. The helper script already saved you a lot of typing.
+
+What & why
+
+A cart is only a wish list. When the customer clicks "Place order", the cart must become an order: a permanent record of what was bought, at what price, where to send it, and where it is in the delivery process. Orders are the most important data in a shop, because they're the business's history and its money. So the design rules here are stricter than for the cart. In this lesson we decide the design and you create the orders app. I'll write the models in the next lesson.
+
+Files involved
+backend/
+├── orders/                ← NEW app: YOU create it with startapp (this lesson)
+└── config/settings.py     ← YOU add 'orders' to INSTALLED_APPS (this lesson)
+
+The design, in plain language
+
+Two tables, like the cart: Order (one per checkout) and OrderItem (one per product in that order). An order belongs to one customer, and a customer can have many orders over time. That's one-to-many, unlike the cart's one-to-one.
+
+An order is a snapshot, frozen at the moment of purchase. This is the biggest difference from the cart. The cart always shows today's price (Lesson 6.1). An order must show what the customer actually paid, forever, even if the admin changes the price tomorrow or deletes the product next year. So each order line copies the product's name and price at checkout time (product_name, unit_price) instead of reading them live. The order also stores its total amount and the shipping address as copies. If the customer later moves house, their old orders still show where those parcels actually went.
+
+Orders are never lost when other things are deleted:
+
+┌───────────────┬───────────────────────────────────────────────────────────────┬────────────────────────────────────────────────────────────────────┐
+│  If this is   │                             …then                             │                                Why                                 │
+│   deleted…    │                                                               │                                                                    │
+├───────────────┼───────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────┤
+│ A product     │ Its order lines stay. The link to the product becomes empty,  │ Sales history must survive catalogue changes. (This is the         │
+│               │ but the copied name and price keep the line readable.         │ SET_NULL option from Lesson 3.1: "keep the row, clear the link.")  │
+├───────────────┼───────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────┤
+│ A customer    │ Refused while they have orders. You deactivate the account    │ The same PROTECT idea as categories with products (Lesson 3.4).    │
+│ account       │ instead (is_active = False).                                  │ Deleting a customer must never erase sales records.                │
+├───────────────┼───────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────┤
+│ An order      │ Its lines go with it                                          │ A line without its order means nothing. (In practice orders are    │
+│               │                                                               │ cancelled, not deleted.)                                           │
+└───────────────┴───────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────────┘
+
+Order status: a small, strict lifecycle.
+                ┌──────────► cancelled ◄─────────┐
+                │ (customer or admin)            │ (admin only, e.g. refund)
+   pending ─────┴──► paid ──────► shipped ──────► delivered
+  (at checkout)   (admin)        (admin)          (admin)
+- Every order starts as pending.
+- Only an admin moves it forward: pending → paid → shipped → delivered.
+- A customer can cancel their own order only while it's pending. Once paid, only an admin can cancel, for example as a refund.
+- delivered and cancelled are final.
+- Anything else (like jumping from pending straight to delivered, or reopening a cancelled order) is refused with a clear 400 message. The allowed moves will be written down in one place in the code, so the API and the admin follow the same rules.
+
+Stock moves with the order. At checkout, each product's stock goes down by the quantity ordered. That's the moment the goods are reserved for this customer. If the order is cancelled, the stock goes back up. (Changing to shipped or delivered doesn't touch stock again.)
+
+Checkout is all-or-nothing. Placing an order involves several steps: check the cart has no issues, check stock once more, create the order, create its lines, reduce stock, empty the cart. If anything fails halfway, for example because another customer bought the last knife a second earlier, none of it may stay: no half-created order, no stock reduced for nothing. Databases guarantee this with a transaction, which you already met briefly in the seed command (Lesson 3.6). In Lesson 7.3 we'll also lock the product rows during checkout, so two customers can't both buy the last item at the same moment.
+
+"Checkout basics": no real payment. Taking real payments (Stripe, PayPal) is a large topic of its own. In our shop, an order is created as pending, and an admin marks it paid, as if payment arrived by bank transfer. I'll show where a real payment step would plug in when we get there. The order confirmation email is sent in the background by Celery in Phase 8, triggered right after a successful checkout.
+
+The endpoints we'll build (Lessons 7.3–7.4):
+
+┌────────────────────────────────┬──────────────────┬──────────────────────────────────────────────────────┐
+│            Endpoint            │       Who        │                         What                         │
+├────────────────────────────────┼──────────────────┼──────────────────────────────────────────────────────┤
+│ POST /api/orders/checkout/     │ customer         │ Turn my cart into an order (with a shipping address) │
+├────────────────────────────────┼──────────────────┼──────────────────────────────────────────────────────┤
+│ GET /api/orders/               │ customer / admin │ My orders / all orders (admins can filter by status) │
+├────────────────────────────────┼──────────────────┼──────────────────────────────────────────────────────┤
+│ GET /api/orders/<id>/          │ owner or admin   │ One order with its lines                             │
+├────────────────────────────────┼──────────────────┼──────────────────────────────────────────────────────┤
+│ POST /api/orders/<id>/cancel/  │ owner            │ Cancel my pending order (stock is returned)          │
+├────────────────────────────────┼──────────────────┼──────────────────────────────────────────────────────┤
+│ PATCH /api/orders/<id>/status/ │ admin            │ Move an order to its next status                     │
+└────────────────────────────────┴──────────────────┴──────────────────────────────────────────────────────┘
+
+Just like the cart, customers can only ever see their own orders. Another customer's order id gives 404.
+
+---
+
+▶️ Your turn
+
+Step 1: Create the app
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py startapp orders
+Get-ChildItem orders
+
+Step 2: Register it
+
+In backend\config\settings.py, add 'orders', under our other apps:
+    # Our apps
+    'accounts',
+    'catalog',
+    'cart',
+    'orders',
+]
+
+Step 3: Verify
+
+uv run python manage.py check
+uv run python manage.py shell -c "from django.apps import apps; print([a.label for a in apps.get_app_configs()][-4:])"
+Expect no issues and ['accounts', 'catalog', 'cart', 'orders'].
+
+Don't commit yet. It'll go in with the models.
+
+---
+
+✅ Checkpoint
+
+Paste the Step 3 output. And if anything in the design seems odd (for example, why the order copies the product name even though it also links to the product), ask now, before it becomes code.
+
+Next: Lesson 7.2, the order models and migration. I write Order and OrderItem with the status choices and allowed transitions. Then you migrate, see the price snapshot and the protection rules in action in the shell (including trying to delete a customer who has an order), and look at orders in the admin.
+
+✻ Churned for 32s · done 5:54 PM
+
+
+
+Phase 7, Lesson 7.2: The order models, migration, and admin
+
+Checkpoint passed: ['accounts', 'catalog', 'cart', 'orders']. (Your first check ran from the project root, and again uv fell back to a Python 3.13 with no project. By now you recognise that message straight away.)
+
+What & why
+
+We turn the order design from Lesson 7.1 into tables, and prove the key promises in the shell: prices are frozen, order lines survive product deletion, and customers with orders can't be deleted.
+
+Files involved (written; check passes and the migration preview is correct)
+backend/orders/
+├── models.py   ← ✏️ Order (with status choices + allowed transitions) and OrderItem
+└── admin.py    ← ✏️ orders in the admin, read-only
+
+What I wrote
+
+Order has a link to the customer that refuses deletion of a customer who has orders (the PROTECT rule, the same as categories with products). It has a status field limited to five values: pending, paid, shipped, delivered, cancelled. These are written as a choices list, which gives the admin a dropdown, gives the API automatic validation, and shows nice labels like "Pending". New orders start as pending. Next to it is a small table of allowed transitions, exactly the diagram from Lesson 7.1 written as data ("from pending you may go to paid or cancelled", and so on), plus a helper that answers "is this status change allowed?" Having the rules in one place means the API, the admin actions, and the tests all use the same list. The order also stores the shipping address fields and the total amount as plain copies, and the database refuses a negative total.
+
+OrderItem links to its order (deleted together with it) and to the product with the "clear the link, keep the row" rule (SET_NULL), so deleting a product never erases sales history. Next to that link it stores its own copies of the product's name and unit price. Its line total is calculated from the copied price, never the product's current one. That's the snapshot promise. Quantity must be at least 1, with the same two protection layers you've seen before.
+
+The admin shows orders with their customer, status, number of lines, and total, with filters for status and date and a search box. The order lines appear inside each order, read-only. I also switched off "add order" and "delete order" in the admin completely. Orders must only be created by checkout, and a real shop never deletes them. Even the status is read-only for now: if you could freely pick any status from a dropdown, you could skip the rules (pending → delivered) and stock would never be returned on cancellation. In Lesson 7.4 we'll add proper admin buttons ("Mark as paid", "Mark as shipped", …) that follow the transitions.
+
+---
+
+▶️ Your turn
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+
+Step 1: Generate and inspect the migration
+
+uv run python manage.py makemigrations orders
+uv run python manage.py sqlmigrate orders 0001
+In the SQL, notice:
+- "status" varchar(20) NOT NULL and a CREATE INDEX ... ("status"). The index makes "show me all pending orders" fast. But there's no rule in the database limiting status to our five values. Choices are enforced by Django (forms, API, admin), not by PostgreSQL. That's one more reason all status changes should go through our code.
+- In orders_orderitem: "product_id" bigint NULL. NULL is allowed here, which is what makes "clear the link, keep the row" possible.
+- CHECK ("total_amount" >= 0) and CHECK ("quantity" >= 1).
+
+Step 2: Apply it
+
+uv run python manage.py migrate
+
+Step 3: Prove the design promises in the shell
+
+Checkout doesn't exist yet (Lesson 7.3), so we'll create one order by hand, only to test the models. (By hand, stock isn't reduced. Checkout will handle that properly.)
+uv run python manage.py shell
+from decimal import Decimal
+from accounts.models import User
+from catalog.models import Category, Product
+from orders.models import Order
+
+customer = User.objects.get(email='customer@example.com')
+teacup = Product.objects.create(category=Category.objects.get(slug='kitchen'), name='Temporary Teacup', price=Decimal('8.00'), stock=10)
+order = Order.objects.create(user=customer, full_name='Test Customer', address='1 Test Street', city='Test City', postal_code='00000', country='Testland', total_amount=Decimal('16.00'))
+order.items.create(product=teacup, product_name=teacup.name, unit_price=teacup.price, quantity=2)
+order, order.status, order.get_status_display()
+→ (<Order: Order #1>, 'pending', 'Pending'). The database stores pending, and get_status_display() gives the human label. Django creates that method automatically for every field with choices.
+
+Promise 1: a price change doesn't touch the order.
+teacup.price = Decimal('12.00')
+teacup.save()
+item = order.items.first()
+item.unit_price, item.line_total, teacup.price
+→ (Decimal('8.00'), Decimal('16.00'), Decimal('12.00')). The order still says 8.00 even though the product now costs 12.00.
+
+Promise 2: deleting the product keeps the order line.
+teacup.delete()
+item.refresh_from_db()
+item.product, item.product_name, item.unit_price
+→ (None, 'Temporary Teacup', Decimal('8.00')). The link was cleared, and the copied name and price still tell you exactly what was bought. (refresh_from_db() reloads the line from the database, because the Python object in memory doesn't notice changes by itself, as you saw in Lesson 3.6.)
+
+Promise 3: the status rules.
+order.can_change_status_to('paid'), order.can_change_status_to('delivered'), order.can_change_status_to('cancelled')
+→ (True, False, True). From pending you may go to paid or cancelled, but not straight to delivered.
+
+Promise 4: customers with orders can't be deleted.
+customer.delete()
+→ ProtectedError: ("Cannot delete some instances of model 'User' because they are referenced through protected foreign keys: 'Order.user'.", ...). Nothing was deleted, not even the customer's cart.
+
+Leave the shell open for Step 5.
+
+Step 4: Look at it in the admin
+
+In a second window, run uv run python manage.py runserver and open Orders in the admin:
+- The list shows Order #1 | customer@example.com | Pending | 1 | 16.00, with By status and By created at filters, and a date bar across the top.
+- There's no "Add order" button. Open the order: the status and total are read-only, the shipping address is editable (for typo fixes), and the line (Temporary Teacup, 8.00 × 2) is read-only, with no delete checkbox and no Delete button at the bottom.
+
+Step 5: Clean up the test order
+
+Back in the shell:
+order.delete()
+exit()
+→ (2, {'orders.OrderItem': 1, 'orders.Order': 1}). The line went with its order (cascade). The admin can't delete orders, but the shell is a developer tool and can. The next real order will be #2 (IDs aren't reused, Lesson 3.4).
