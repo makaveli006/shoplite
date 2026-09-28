@@ -28,6 +28,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('accounts.urls')),
     path('api/', include('cart.urls')),
+    path('api/', include('orders.urls')),
     path('api/', include('catalog.urls')),
     # "Log in" / "Log out" links for the browsable API (session login, development only).
     path('api-auth/', include('rest_framework.urls')),

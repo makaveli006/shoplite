@@ -5064,3 +5064,181 @@ Back in the shell:
 order.delete()
 exit()
 → (2, {'orders.OrderItem': 1, 'orders.Order': 1}). The line went with its order (cascade). The admin can't delete orders, but the shell is a developer tool and can. The next real order will be #2 (IDs aren't reused, Lesson 3.4).
+
+
+
+
+Phase 7, Lesson 7.3: Checkout
+
+Lesson 7.2 checkpoint passed: the price stayed 8.00 after the product went to 12.00, the order line survived with the name Temporary Teacup after the product was deleted, and the customer couldn't be deleted while they had an order. Commit 742d679 is in.
+
+What & why
+
+When a customer presses "Place order", their cart has to become an order. That sounds like one action, but it's really several steps that must all happen together:
+1. check that the cart isn't empty
+2. check that every product is still for sale and there's enough of it
+3. write down the order with today's prices
+4. take the sold items out of stock
+5. empty the cart
+
+Two things can go wrong, and checkout must handle both.
+
+Something breaks in the middle. Imagine the order is written down, but the computer crashes before the stock is reduced. Now the shop has an order but still "has" the items, and could sell them twice. Or the stock is reduced, but no order exists, so the items are simply lost. Checkout must be all or nothing: either every step succeeds, or it's as if the customer never pressed the button.
+
+Two customers want the last item at the same moment. There's one cutting board left. Bob and Ana both have it in their carts, and they press "Place order" within the same split second. Both checks run at nearly the same time, both see "1 in stock", both succeed, and the shop has sold one board twice. This is called a race condition: the result depends on who wins a race that neither can see. It's rare, but in a busy shop it will happen, typically on the most popular product during a sale.
+
+What happens now when a customer checks out
+
+1. Their cart is "held." While one checkout is running for a customer, any second checkout for the same customer (a double click, or the shop open in two browser tabs) has to wait. When it gets its turn, the cart is already empty, so it's refused with "Your cart is empty." A double click can never create two orders.
+2. The products being bought are "held." Nobody else can buy these particular products until this checkout finishes. If Ana's checkout arrives while Bob's is running, Ana's simply waits a few milliseconds. Only then does it look at the stock, and it sees the number after Bob's purchase. The products are always held in the same fixed order, so two checkouts can never end up each waiting for the other forever.
+3. Stock and availability are checked again, using those fresh numbers. The stock check when adding to the cart (Lesson 6.3) isn't enough, because hours may have passed since then. If anything is wrong, checkout stops and lists every problem at once, for example "Only 1 of "Chef Knife" in stock, but your cart has 2." Nothing is changed, and the cart stays exactly as it was, so the customer can fix it.
+4. The order is written down, with each product's name and price copied (the snapshot from Lesson 7.2) and the total calculated from those copied prices. It starts as pending.
+5. Stock is reduced by the quantities bought. As a last safety net, the database itself refuses negative stock (Lesson 3.3).
+6. The cart is emptied.
+7. Only now is everything saved, all at once. If any step above fails, even an unexpected crash, every change is undone together: no order, no stock change, and the cart is untouched. Holding the cart and products ends at this moment too, and waiting checkouts continue.
+
+The customer gets the finished order back (number, status, lines, total, address). If checkout was refused, they get a clear list of problems instead.
+
+Where real payment would go: in a real shop, a payment step (for example Stripe) would happen here, and the order would become paid when the payment company confirms it. In our shop, orders stay pending until an admin marks them paid (Lesson 7.4). The confirmation email is added in Phase 8 and sent in the background right after a successful checkout.
+
+What I added
+
+- The checkout logic itself, in its own file in the orders app, separate from the web part. That way the same logic can be used by the API now and by tests later (Phase 9).
+- The checkout endpoint: POST /api/orders/checkout/. You send the shipping address (name, address, city, postal code, country, and optionally a phone number) and get the new order back.
+- A race demo script (tools/race_demo.py) that makes Bob and Ana press "Place order" for the last cutting board at exactly the same instant, so you can watch the protection work.
+
+What my tests showed (all test data was removed afterwards):
+
+┌──────────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────────────────────────────────┐
+│                             Test                             │                                       Result                                        │
+├──────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ Empty cart                                                   │ refused: Your cart is empty.                                                        │
+├──────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ Address fields missing                                       │ refused, listing every missing field                                                │
+├──────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ 2 knives in the cart, only 1 in stock                        │ refused, with the cart and stock unchanged                                          │
+├──────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ A crash simulated halfway, right after the order was written │ nothing saved: 0 orders, same stock, same cart                                      │
+├──────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ A normal checkout (2 knives + 3 mugs)                        │ order created as Pending, total 137.48, stock went down 5→3 and 20→17, cart emptied │
+├──────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ Bob and Ana buying the last board at the same instant        │ Bob got the order; Ana was told Only 0 ... in stock; stock ended at 0, never −1     │
+└──────────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────┘
+
+My tests used up some order numbers, so your first real order will probably be #5 (numbers are never reused, Lesson 3.4).
+
+---
+
+▶️ Your turn
+
+Window 1:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py check
+uv run python manage.py runserver
+
+Window 2:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+. .\tools\api-helpers.ps1
+$bob   = Get-AuthHeader 'bob@example.com' 'Sunny-Garden-42'
+$admin = Get-AuthHeader 'subin@ontash.net' 'YOUR_ADMIN_PASSWORD'
+$knife = (Invoke-RestMethod "$api/products/chef-knife/").id
+$mug   = (Invoke-RestMethod "$api/products/blue-ceramic-mug/").id
+$ship  = @{ full_name = 'Bob Builder'; address = '5 Hammer Lane'; city = 'Test City'; postal_code = '12345'; country = 'Testland' }
+
+Step 1: The refusals
+
+Send-Json DELETE "$api/cart/" -Headers $bob | Out-Null
+Send-Json POST "$api/orders/checkout/" $ship -Headers $bob
+Send-Json POST "$api/orders/checkout/" @{ full_name = 'Bob' } -Headers $bob
+1. 400 ... "problems":["Your cart is empty."]
+2. 400, listing address, city, postal_code, and country as required
+
+Now put 2 knives in the cart, and then (as admin) lower the stock to 1 after they were added. That's the "hours passed since adding" situation:
+Send-Json POST "$api/cart/items/" @{ product_id = $knife; quantity = 2 } -Headers $bob | Out-Null
+Send-Json POST "$api/cart/items/" @{ product_id = $mug; quantity = 3 } -Headers $bob | Out-Null
+Send-Json PATCH "$api/products/chef-knife/" @{ stock = 1 } -Headers $admin | Out-Null
+Send-Json POST "$api/orders/checkout/" $ship -Headers $bob
+(Invoke-RestMethod "$api/cart/" -Headers $bob).item_count
+→ 400 ... "Only 1 of \"Chef Knife\" in stock, but your cart has 2." Bob's cart still has all 5 pieces. Nothing was touched.
+
+Step 2: A successful checkout
+
+Put the stock back and try again:
+Send-Json PATCH "$api/products/chef-knife/" @{ stock = 5 } -Headers $admin | Out-Null
+$order = Invoke-RestMethod -Method Post -Uri "$api/orders/checkout/" -Headers $bob -ContentType 'application/json' -Body ($ship | ConvertTo-Json)
+$order | Select-Object id, status, status_display, total_amount, full_name, city
+$order.items | Select-Object product_name, unit_price, quantity, line_total
+→ a new order (probably #5) with status Pending and total 137.48: 2 × 49.99 + 3 × 12.50.
+
+Now check the three side effects:
+(Invoke-RestMethod "$api/products/chef-knife/").stock
+(Invoke-RestMethod "$api/products/blue-ceramic-mug/").stock
+(Invoke-RestMethod "$api/cart/" -Headers $bob).item_count
+→ 3, 17, 0. The stock went down, and the cart is empty. In the admin (Orders) you'll see Bob's order, with its lines and the address.
+
+Step 3: A double click can't create two orders
+
+The cart is empty now, so pressing "Place order" again changes nothing:
+Send-Json POST "$api/orders/checkout/" $ship -Headers $bob
+→ 400 ... "Your cart is empty."
+
+Step 4: The race, live
+
+Let Bob and Ana fight over the last cutting board:
+uv run --project backend python tools/race_demo.py
+It asks for your admin password (typing is hidden), then shows every step:
+"Bamboo Cutting Board" has 30 in stock. Setting it to 1 (the last one).
+Bob puts the last one in the cart -> 201
+Ana puts the last one in the cart -> 201
+
+Both customers press "Place order" at the same moment...
+
+Bob: 201 -> order #6 created, total 18.00
+Ana: 400 -> ['Only 0 of "Bamboo Cutting Board" in stock, but your cart has 1.']
+
+Stock now: 0 (never negative, sold exactly once).
+Stock restored to 29 (30 minus the one really sold).
+Who wins is random. Run it a few times, and sometimes Ana gets the board. But there's always exactly one winner, and stock never goes below 0. (--project backend tells uv to use the backend's Python environment even though you're in the project root.)
+
+After each run, the loser still has the board in their cart. That's proof the refused checkout left their cart alone. And each run creates a real pending order for the winner, which you'll be able to cancel in the next lesson.
+
+Step 5: Commit
+
+git status
+git add backend tools
+git commit -m "Checkout: all-or-nothing order creation with product locking; race condition demo"
+
+---
+
+❓ If something goes wrong
+
+┌─────────────────────────────────────────────┬──────────────────────────────────────────────────┬───────────────────────────────────────────────────┐
+│                What you see                 │                       Why                        │                        Fix                        │
+├─────────────────────────────────────────────┼──────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+│ 404 for /api/orders/checkout/               │ The orders web addresses aren't connected        │ config/urls.py must include orders.urls (restart  │
+│                                             │                                                  │ the server if it didn't reload)                   │
+├─────────────────────────────────────────────┼──────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+│ The race demo stops with Login failed for   │ Ana's password differs from Lesson 5.2           │ Use the password you registered her with (it's    │
+│ ana.silva@example.com                       │                                                  │ written at the top of the script)                 │
+├─────────────────────────────────────────────┼──────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+│ The race demo: both customers get 400       │ The board's stock was already 0 before the demo, │ Set the board's stock in the admin and run it     │
+│                                             │  or someone's cart had more than 1               │ again                                             │
+├─────────────────────────────────────────────┼──────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+│ Invoke-RestMethod : (400) Bad Request in    │ The cart had a problem (for example, stock is    │ Use Send-Json to see the problems list            │
+│ Step 2                                      │ still 1)                                         │                                                   │
+└─────────────────────────────────────────────┴──────────────────────────────────────────────────┴───────────────────────────────────────────────────┘
+
+---
+
+✅ Checkpoint
+
+Paste:
+1. the 400 message from Step 1 about the knife,
+2. the order summary and lines from Step 2, and
+3. the output of one race demo run.
+
+Next: Lesson 7.4, managing orders. Customers can see their order history and cancel pending orders (stock goes back automatically), and admins get "Mark as paid / shipped / delivered / cancelled" actions that only allow the moves from the status diagram.
+
+✻ Crunched for 2m 35s · done 6:24 PM
+
+※ recap: We're building your Django + React shop step by step, and Lesson 7.3 (che
