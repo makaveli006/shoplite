@@ -6855,3 +6855,78 @@ git add frontend
 git commit -m "Checkout page with shipping form and error handling; order confirmation / detail page with status badge"
 
 ---
+
+
+
+
+
+Phase 13, Lesson 13.3: My orders, and cancelling an order
+
+Lesson 13.2 committed as 6645f11. Great that checkout, the confirmation, and the "last item" case all worked perfectly.
+
+What & why
+
+Customers can now place orders and see each one right after ordering, but there's no way to find an older order, and no way to change your mind. This lesson completes the customer side of the shop:
+- My orders: every order you've placed, newest first, with its status at a glance
+- Cancel order: while an order is still pending (not yet paid), the customer can cancel it themselves
+
+What happens now
+
+The My orders page (/orders, from the header link):
+- A table of your orders: order number, date, number of items, total, and a coloured status badge (the same badge as on the order page).
+- Click any row to open that order.
+- More than 12 orders are split into pages, with Previous / Next buttons and the page number kept in the web address, just like the product list (Lesson 11.2). While the next page loads, the current one stays visible, slightly faded.
+- No orders yet: "No orders yet — When you place an order, it will appear here." with a Start shopping button.
+- Customers only ever see their own orders; the API decides that (Lesson 7.4).
+- One thing to know: signed in as an admin, this list shows all customers' orders, because the API gives staff everything. That's exactly what the admin screens in Phase 14 will build on, with their own proper page.
+
+Cancelling an order (on the order page, only while the order is pending):
+1. The customer clicks Cancel order. A confirmation dialog opens: "Cancel order #14? The order will be cancelled and nothing will be sent. This can't be undone.", with Keep my order and Cancel order buttons.
+2. After confirming, the server cancels the order and puts the items back into stock (Lesson 7.4). The "held" order also means two clicks can't return the stock twice.
+3. You get "Order #14 was cancelled.". The badge turns grey and struck through (Cancelled), and the Cancel order button disappears.
+4. The frontend marks the order list and product data as outdated, so the list shows the new status, and product pages show the returned stock.
+5. If the shop already marked the order as paid (for example, in another browser tab, just before the customer clicked), the server refuses. The customer sees its message: "This order is already paid and can no longer be cancelled. Please contact us." That's the same rule from Lesson 7.1, now visible in the shop.
+
+What I built
+
+- The My orders page, with the table, clickable rows, pages, loading, error, and empty states
+- A Cancel order button with its confirmation dialog, shown on pending orders
+- The data connections were already prepared in the last lesson (the order list, and cancel with its "refresh afterwards" rules)
+
+Tested: the TypeScript check, build, and lint pass. Please try the steps in the browser.
+
+---
+
+▶️ Your turn
+
+With Django, Docker, and the frontend running (npm run dev in frontend\):
+
+Step 1: The order list
+
+Sign in as Ana and click Orders in the header. You'll see her orders, newest first: the ones from Lesson 13.2, plus the earlier ones made from PowerShell (#10 and #11 from Phase 8, and the race-demo order if Ana won it). Each has its badge, and the cancelled one is grey and struck through. Click a row to open that order, then press Back.
+
+Step 2: Cancel a pending order, and see the stock return
+
+1. Note the current stock of the Gel Pen Set (open its product page).
+2. Open one of Ana's pending orders that contains gel pens (for example, the one from Lesson 13.2) and click Cancel order. The dialog opens. Press Esc: nothing happens. Click Cancel order again and confirm.
+3. You get "Order #... was cancelled.", the badge turns Cancelled, and the button is gone.
+4. Open the Gel Pen Set again. Its stock went up by the quantity from that order.
+5. Back on My orders, the list shows the new status.
+
+Step 3: Too late to cancel
+
+1. Open another of Ana's pending orders in the shop and leave the page open.
+2. In a second tab, open the Django admin → Orders, tick that order, and use Mark selected orders as paid (Lesson 7.4).
+3. Back in the shop tab, without reloading, click Cancel order and confirm. You get the red message "This order is already paid and can no longer be cancelled. Please contact us.", and the order stays as it was.
+4. Reload the page. The badge now says Paid, and there's no Cancel order button.
+
+Step 4: As an admin (just to see)
+
+Sign out, sign in with your admin account, and open Orders. You see everyone's orders, as explained above.
+
+Step 5: Build and commit
+
+npm run build
+cd ..
+git add frontend
+git commit -m "My orders page with pagination and status badges; cancel pending orders with confirmation dialog"

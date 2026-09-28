@@ -2,6 +2,7 @@ import { isAxiosError } from 'axios'
 import { CheckCircle2, PackageX } from 'lucide-react'
 import { Link, useParams, useSearchParams } from 'react-router'
 
+import { CancelOrderButton } from '@/components/orders/CancelOrderButton'
 import { OrderStatusBadge } from '@/components/orders/OrderStatusBadge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -112,9 +113,12 @@ export function OrderDetailPage() {
         </Card>
       </div>
 
-      <Link to="/orders" className="text-sm underline underline-offset-4">
-        See all my orders
-      </Link>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Link to="/orders" className="text-sm underline underline-offset-4">
+          See all my orders
+        </Link>
+        {data.status === 'pending' && <CancelOrderButton orderId={data.id} />}
+      </div>
     </div>
   )
 }
