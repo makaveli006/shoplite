@@ -156,6 +156,8 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
     # Record the login time in User.last_login (visible in the admin).
     'UPDATE_LAST_LOGIN': True,
+    # Our login serializer: lower-cases the email before checking the password.
+    'TOKEN_OBTAIN_SERIALIZER': 'accounts.serializers.EmailTokenObtainPairSerializer',
 }
 
 

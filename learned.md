@@ -3988,3 +3988,442 @@ uv run python manage.py runserver
 In Window 2, log in again (Step 3), wait more than 60 seconds, then:
 curl.exe -sS -w "  <- %{http_code}`n" -H "Authorization: Bearer $($tokens.access)" "$api/"
 → ..."message":"Token is expired"...  <- 401. That's exactly the signal React will use to refresh automatically. Afterwards, in Window 1: Ctrl+C, Remove-Item Env:JWT_ACCESS_MINUTES, and restart normally.
+
+
+
+
+What & why
+
+Right now only the admin can create accounts. A shop needs:
+1. POST /api/auth/register/: a visitor creates a customer account. The password must pass Django's password validators and be hashed before saving.
+2. GET /api/auth/me/: "who am I?" React calls this after login to learn the user's name and whether they're staff (to show admin menus).
+3. PATCH /api/auth/me/: the user edits their own name. They must not be able to make themselves staff.
+
+We also fix an inconsistency: Ana@Example.com and ana@example.com should be the same account. Emails are now normalised to lowercase at registration and at login.
+
+Files involved (written, and verified in a rolled-back transaction, so no users were created)
+backend/
+├── accounts/serializers.py   ← NEW: RegisterSerializer, UserSerializer, EmailTokenObtainPairSerializer
+├── accounts/views.py         ← ✏️ RegisterView, MeView
+├── accounts/urls.py          ← ✏️ + register/ and me/
+└── config/settings.py        ← ✏️ SIMPLE_JWT['TOKEN_OBTAIN_SERIALIZER'] → our login serializer
+Request flow for registration:
+POST /api/auth/register/ {"email": " Ana.Silva@Example.COM ", "username": "ana", "password": "..."}
+  → RegisterView (CreateAPIView): AllowAny, no authentication
+  → RegisterSerializer.is_valid():
+       field checks (email format, username unique, required fields)
+       validate_email()  → " Ana.Silva@Example.COM " → "ana.silva@example.com", then a case-insensitive duplicate check
+       validate()        → Django password validators (length, common, numeric, similarity)
+  → serializer.save() → create() → User.objects.create_user(...)  (password hashed)
+  ← 201 {"id": 5, "email": "ana.silva@example.com", "username": "ana", ...}   (no password in the response)
+
+---
+
+The code, explained line by line (accounts/serializers.py)
+
+Imports
+
+from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+from rest_framework import serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+User = get_user_model()
+- import ... as DjangoValidationError renames the imported class in this file only. Django and DRF both have a class called ValidationError, and they're different classes:
+  - Django's comes from django.core.exceptions and is raised by validate_password().
+  - DRF's is used as serializers.ValidationError and turns into a 400 response.
+
+  Without the alias, the second import of the same name would silently replace the first. The alias keeps both clear.
+- User = get_user_model() runs once, when Python first imports this module. It returns the class named by AUTH_USER_MODEL (accounts.User, Lesson 2.5) and stores it in a module-level variable. The rest of the file uses User like a normal class name. This is the pattern Django recommends instead of importing the model directly, so the code keeps working if the user model is ever changed.
+
+A small helper function
+
+def normalize_email(value):
+    """Emails are compared case-insensitively: " Ana@Example.COM " -> "ana@example.com"."""
+    return value.strip().lower()
+- def name(parameters): defines a function. The indented block is its body.
+- The triple-quoted string on the first line is a docstring. Python stores it as the function's documentation (help(normalize_email) would show it).
+- value.strip().lower() is method chaining. Strings are immutable in Python, so .strip() doesn't change value; it returns a new string without leading or trailing whitespace. .lower() is then called on that new string and returns another new, all-lowercase one.
+- We define it once and use it in two places (register and login), so both always normalise identically.
+
+RegisterSerializer: the class and its fields
+
+class RegisterSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, style={'input_type': 'password'})
+
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'username', 'first_name', 'last_name', 'password']
+        read_only_fields = ['id']
+- class RegisterSerializer(serializers.ModelSerializer): defines a class that inherits from ModelSerializer. It gets all of ModelSerializer's behaviour (auto-generated fields, is_valid(), save(), …), and we only add or override what we need.
+- Declaring password explicitly overrides the auto-generated one:
+  - write_only=True: accepted as input, never included in output. Without it, ModelSerializer would include the password field in the response, which is the stored hash. Even a hash should never leave the server.
+  - style={'input_type': 'password'} is a small dict telling the browsable API to render a password box (dots instead of characters). It has no effect on JSON clients.
+- class Meta: is a class nested inside a class. It's just a container for configuration that ModelSerializer reads: which model, which fields.
+- fields is an allow-list. Notice what's not there: is_staff, is_superuser, is_active, groups. In my test I sent "is_staff": true in the registration body. It was silently ignored, and the stored user had is_staff = False. This protection against mass assignment (sending extra fields to escalate privileges) comes from using an explicit fields list.
+- username and email validation comes free from the model: unique=True becomes "A user with that username already exists.", and EmailField becomes "Enter a valid email address."
+
+validate_email: field-level validation
+
+def validate_email(self, value):
+    value = normalize_email(value)
+    if User.objects.filter(email__iexact=value).exists():
+        raise serializers.ValidationError('An account with this email already exists.')
+    return value
+- DRF finds this method by its name (validate_ + field name) and calls it with the already format-checked value.
+- self is the serializer instance. Every method on a class receives the object itself as its first parameter. Python passes it automatically; you never pass it yourself.
+- email__iexact=value uses the iexact lookup, a case-insensitive exact match (in SQL, UPPER(email) = UPPER(%s)). The database's unique constraint compares case-sensitively, so without this check Customer@example.com could create a second account.
+- .exists() runs SELECT 1 ... LIMIT 1, the cheapest way to ask "is there at least one?"
+- raise stops the method immediately and hands the error to DRF, which attaches it to the email field.
+- return value is essential: whatever you return is what gets saved. We return the normalised version, so the database always stores lowercase.
+
+validate: object-level validation with Django's password validators
+
+def validate(self, attrs):
+    candidate = User(**{key: value for key, value in attrs.items() if key != 'password'})
+    try:
+        validate_password(attrs['password'], user=candidate)
+    except DjangoValidationError as error:
+        raise serializers.ValidationError({'password': list(error.messages)})
+    return attrs
+The first line packs three Python features together:
+1. attrs is a dict of all the validated fields: {'email': 'ana@...', 'username': 'ana', 'password': '...'}.
+2. {key: value for key, value in attrs.items() if key != 'password'} is a dict comprehension. It builds a new dict by looping over attrs.items() (which yields (key, value) pairs) and keeps every pair except the password. It's a compact version of:
+data = {}
+for key, value in attrs.items():
+    if key != 'password':
+        data[key] = value
+3. User(**data): the ** operator unpacks a dict into keyword arguments. So User(**{'email': 'a@b.c', 'username': 'ana'}) means User(email='a@b.c', username='ana').
+   - This creates a User object in memory only. Nothing touches the database until .save() is called.
+   - We need it because validate_password(password, user=...) includes UserAttributeSimilarityValidator, which compares the password to the user's email and username. It needs a user object to compare against.
+
+The try/except block:
+- Code inside try: runs normally. If it raises a DjangoValidationError, Python jumps to the matching except block, and as error names the exception object.
+- error.messages is a list of human-readable messages. Wrapping it in list(...) guarantees a plain list.
+- We then translate the Django exception into DRF's ValidationError, as a dict {'password': [...]}, so the messages are attached to the password field and returned as a 400. Without this translation, the uncaught Django exception would become a 500.
+- Which validators run is decided by AUTH_PASSWORD_VALIDATORS in settings.py, the list from Lesson 2.2. We reuse Django's rules instead of inventing our own.
+
+create: hashing the password
+
+def create(self, validated_data):
+    return User.objects.create_user(**validated_data)
+- serializer.save() (called by the view) calls create() when there's no existing instance, passing all validated fields as a dict.
+- **validated_data unpacks it again: create_user(email=..., username=..., password=..., first_name=...).
+- create_user() is a method of Django's UserManager (Lesson 2.6's managers=[('objects', UserManager())]). It calls user.set_password(password), which produces pbkdf2_sha256$870000$..., then saves. My test confirmed the stored value starts with pbkdf2_sha256$870000$.
+- The default ModelSerializer.create() would call User.objects.create(**validated_data), which stores the password as plain text. That's the most common security bug in Django registration code, and it's why we override create().
+
+UserSerializer: read-only fields protect the role
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'username', 'first_name', 'last_name', 'is_staff', 'date_joined']
+        read_only_fields = ['id', 'email', 'is_staff', 'date_joined']
+- is_staff must be visible, because React needs it to show admin menus. But it's listed in read_only_fields, so a PATCH {"is_staff": true} is ignored, not applied. My test PATCHed is_staff and email along with last_name: only last_name changed.
+- email is read-only because it's the login identifier. Changing it safely would need re-verification, which is out of scope for this course.
+
+EmailTokenObtainPairSerializer: normalising at login
+
+class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
+    def validate(self, attrs):
+        attrs[self.username_field] = normalize_email(attrs[self.username_field])
+        return super().validate(attrs)
+- We subclass the library's login serializer and override only validate().
+- self.username_field is an attribute the parent class sets to User.USERNAME_FIELD, which is 'email' for us. Using the attribute instead of hard-coding 'email' keeps the code correct if the login field changes.
+- attrs[...] = ... replaces the value in the dict before the password check.
+- super().validate(attrs) calls the parent class's validate(), which does the real work (authenticate(), token creation). super() means "the next class up in the inheritance chain." This pattern (tweak the input, then delegate to the parent) is how you customise library classes without copying their code.
+- It's switched on in settings.py with the dotted path 'TOKEN_OBTAIN_SERIALIZER': 'accounts.serializers.EmailTokenObtainPairSerializer'. Simple JWT's TokenObtainPairView reads that setting to decide which serializer to use.
+
+---
+
+The code, explained line by line (accounts/views.py)
+
+class RegisterView(generics.CreateAPIView):
+    serializer_class = RegisterSerializer
+    permission_classes = [AllowAny]
+    authentication_classes = []
+- CreateAPIView implements only post(). Internally it does:
+  a. serializer = self.get_serializer(data=request.data)
+  b. serializer.is_valid(raise_exception=True): on failure, it raises, and DRF turns that into a 400 with serializer.errors
+  c. self.perform_create(serializer), which just calls serializer.save(), which calls our create()
+  d. Response(serializer.data, status=201): serializer.data now describes the saved user (password excluded by write_only)
+- These are class attributes: variables defined directly in the class body, shared by every instance. DRF's machinery reads them.
+- permission_classes = [AllowAny] overrides the global IsAuthenticated default. A visitor can't be logged in before having an account.
+- authentication_classes = [] (an empty list) means don't even try to identify the user on this endpoint. Why it matters: JWTAuthentication rejects a request whose header contains an invalid or expired token with a 401, even on an AllowAny view. A browser that still holds an old expired token would then be unable to register. My test sent Authorization: Bearer broken.token.value to /register/ and still got 201. (Simple JWT's own login view does the same thing internally.)
+
+class MeView(generics.RetrieveUpdateAPIView):
+    serializer_class = UserSerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ['get', 'patch', 'head', 'options']
+
+    def get_object(self):
+        return self.request.user
+- RetrieveUpdateAPIView provides get() (retrieve), put() (update), and patch() (partial update). All three call self.get_object() to find which object to work on.
+- Normally get_object() reads an id or slug from the URL. We override it to return self.request.user, the user object that JWTAuthentication built from the token. There is no id in the URL, so a user can never ask for someone else's profile. There's simply no parameter to change.
+- http_method_names is a list of allowed HTTP methods (in lowercase). We leave out 'put': a PUT would require every writable field. Anything not listed → 405 Method Not Allowed.
+- permission_classes = [IsAuthenticated] is already the global default, but writing it here makes the view's rule obvious to anyone reading the file.
+
+---
+
+Results of my verification (rolled back afterwards)
+
+┌──────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────────────────────────────────┐
+│                         Request                          │                                       Result                                        │
+├──────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ Register with password 123                               │ 400, password: too short / too common / entirely numeric (three validators at once) │
+├──────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ Register with CUSTOMER@Example.com                       │ 400 An account with this email already exists. (case-insensitive)                   │
+├──────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ Register with a bad email + an existing username         │ 400, errors for both fields in one response                                         │
+├──────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ Register " Ana.Silva@Example.COM " with "is_staff": true │ 201, stored as ana.silva@example.com, is_staff = False, password hashed             │
+├──────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ Login with ANA.SILVA@example.com                         │ 200, tokens returned                                                                │
+├──────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ GET /me/ with the token                                  │ 200, Ana's profile                                                                  │
+├──────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ PATCH /me/ with last_name, is_staff, email               │ 200, only last_name changed                                                         │
+├──────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ PUT /me/                                                 │ 405                                                                                 │
+├──────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────┤
+│ GET /me/ without a token                                 │ 401                                                                                 │
+└──────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────┘
+
+---
+
+▶️ Your turn
+
+Window 1:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py check
+uv run python manage.py runserver
+
+Step 1: A reusable PowerShell helper that shows status and body, even for errors
+
+Invoke-RestMethod throws on 4xx/5xx in PowerShell 5.1, which makes error testing clumsy. Paste this function once into Window 2 (I tested it in Windows PowerShell 5.1):
+function Send-Json {
+    param([string]$Method, [string]$Url, $Body = $null, [hashtable]$Headers = @{})
+    $json = if ($null -ne $Body) { $Body | ConvertTo-Json } else { $null }
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Method $Method -Uri $Url -Headers $Headers -ContentType 'application/json' -Body $json
+        "$($response.StatusCode) $($response.Content)"
+    } catch {
+        "$([int]$_.Exception.Response.StatusCode) $($_.ErrorDetails.Message)"
+    }
+}
+$api = "http://127.0.0.1:8000/api"
+- param(...) declares named parameters. $Body = $null gives a default value, so -Body is optional.
+- Invoke-WebRequest returns the raw response (status code + text), unlike Invoke-RestMethod, which parses it. -UseBasicParsing avoids an old Internet Explorer dependency in 5.1.
+- In catch, $_ is the error. .Exception.Response.StatusCode is the HTTP status, and .ErrorDetails.Message holds the response body.
+
+Usage: Send-Json POST "$api/..." @{ key = 'value' }. The hashtable is converted to JSON for you.
+
+Step 2: Registration errors
+
+Send-Json POST "$api/auth/register/" @{ email = 'marvellous@example.com'; username = 'marvellous'; password = '123' }
+Send-Json POST "$api/auth/register/" @{ email = 'marvellous@example.com'; username = 'marvellous'; password = 'marvellous99' }
+Send-Json POST "$api/auth/register/" @{ email = 'CUSTOMER@Example.com'; username = 'someone'; password = 'Sunny-Garden-42' }
+Send-Json POST "$api/auth/register/" @{ email = 'not-an-email'; username = 'customer1'; password = 'Sunny-Garden-42' }
+Expected, all 400:
+1. {"password":["This password is too short...","This password is too common.","This password is entirely numeric."]}
+2. {"password":["The password is too similar to the username."]}: the similarity validator, using our temporary candidate user
+3. {"email":["An account with this email already exists."]}: our iexact check
+4. {"email":["Enter a valid email address."],"username":["A user with that username already exists."]}: all field errors in one response, so a form can highlight every problem at once
+
+Step 3: Register successfully (and try to sneak in is_staff)
+
+Send-Json POST "$api/auth/register/" @{ email = '  Ana.Silva@Example.COM '; username = 'ana'; password = 'Sunny-Garden-42'; first_name = 'Ana'; is_staff = $true }
+→ 201 {"id":...,"email":"ana.silva@example.com","username":"ana","first_name":"Ana","last_name":""}
+- The email was trimmed and lowercased.
+- There's no password in the response (write_only).
+- The id is probably 5 or higher: my rolled-back test used up ids 3 and 4 (sequence gaps, Lesson 3.4).
+
+Check the database directly:
+docker compose exec db psql -U shoplite -d shoplite -c "SELECT id, email, username, is_staff, left(password, 22) FROM accounts_user ORDER BY id;"
+Ana has is_staff = f and a pbkdf2_sha256$870000$... hash. The is_staff: true you sent was ignored.
+
+Step 4: Log in with different capitalisation, then call "me"
+
+$login = Invoke-RestMethod -Method Post -Uri "$api/auth/token/" -ContentType 'application/json' -Body (@{ email = 'ANA.SILVA@example.com'; password = 'Sunny-Garden-42' } | ConvertTo-Json)
+$anaAuth = @{ Authorization = "Bearer $($login.access)" }
+Send-Json GET "$api/auth/me/" -Headers $anaAuth
+- The login works despite the capitals, thanks to EmailTokenObtainPairSerializer.
+- -Body (...): the parentheses make PowerShell run the inner pipeline first and pass its result as the argument.
+- → 200 {"id":...,"email":"ana.silva@example.com","username":"ana","first_name":"Ana","last_name":"","is_staff":false,"date_joined":"..."}
+
+Step 5: Update the profile, and try to escalate
+
+Send-Json PATCH "$api/auth/me/" @{ last_name = 'Silva'; is_staff = $true; email = 'hacker@example.com' } -Headers $anaAuth
+Send-Json PUT "$api/auth/me/" @{ last_name = 'X' } -Headers $anaAuth
+Send-Json GET "$api/auth/me/"
+1. 200, with "last_name":"Silva", still "is_staff":false, and the same email. The read-only fields were ignored.
+2. 405 {"detail":"Method \"PUT\" not allowed."}: http_method_names
+3. 401 {"detail":"Authentication credentials were not provided."}: no token
+
+Step 6: Registration ignores a stale token
+
+Send-Json POST "$api/auth/register/" @{ email = 'bob@example.com'; username = 'bob'; password = 'Sunny-Garden-42' } -Headers @{ Authorization = 'Bearer this.is.garbage' }
+Send-Json GET "$api/auth/me/" -Headers @{ Authorization = 'Bearer this.is.garbage' }
+1. 201: authentication_classes = [] means the header is never examined. (Bob is a real account now, which is useful later as a second customer.)
+2. 401 ... "Token is invalid": on a normal endpoint, the same bad header is rejected.
+
+Step 7: Browsable API (optional)
+
+Open http://127.0.0.1:8000/api/auth/register/ in the browser. There's an HTML form with a masked Password box (style={'input_type': 'password'}), and no field for is_staff.
+
+Step 8: Commit
+
+Stop the server, then:
+cd ..
+git status
+git add backend
+git commit -m "Register and me endpoints; password validation; case-insensitive email login"
+
+---
+
+❓ If something goes wrong
+└──────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────┘
+
+---
+
+▶️ Your turn
+
+Window 1:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py check
+uv run python manage.py runserver
+
+Step 1: A reusable PowerShell helper that shows status and body, even for errors
+
+Invoke-RestMethod throws on 4xx/5xx in PowerShell 5.1, which makes error testing clumsy. Paste this function once into Window 2 (I tested it in Windows PowerShell 5.1):
+function Send-Json {
+    param([string]$Method, [string]$Url, $Body = $null, [hashtable]$Headers = @{})
+    $json = if ($null -ne $Body) { $Body | ConvertTo-Json } else { $null }
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Method $Method -Uri $Url -Headers $Headers -ContentType 'application/json' -Body $json
+        "$($response.StatusCode) $($response.Content)"
+    } catch {
+        "$([int]$_.Exception.Response.StatusCode) $($_.ErrorDetails.Message)"
+    }
+}
+$api = "http://127.0.0.1:8000/api"
+- param(...) declares named parameters. $Body = $null gives a default value, so -Body is optional.
+- Invoke-WebRequest returns the raw response (status code + text), unlike Invoke-RestMethod, which parses it. -UseBasicParsing avoids an old Internet Explorer dependency in 5.1.
+- In catch, $_ is the error. .Exception.Response.StatusCode is the HTTP status, and .ErrorDetails.Message holds the response body.
+
+Usage: Send-Json POST "$api/..." @{ key = 'value' }. The hashtable is converted to JSON for you.
+
+Step 2: Registration errors
+
+Send-Json POST "$api/auth/register/" @{ email = 'marvellous@example.com'; username = 'marvellous'; password = '123' }
+Send-Json POST "$api/auth/register/" @{ email = 'marvellous@example.com'; username = 'marvellous'; password = 'marvellous99' }
+Send-Json POST "$api/auth/register/" @{ email = 'CUSTOMER@Example.com'; username = 'someone'; password = 'Sunny-Garden-42' }
+Send-Json POST "$api/auth/register/" @{ email = 'not-an-email'; username = 'customer1'; password = 'Sunny-Garden-42' }
+Expected, all 400:
+1. {"password":["This password is too short...","This password is too common.","This password is entirely numeric."]}
+2. {"password":["The password is too similar to the username."]}: the similarity validator, using our temporary candidate user
+3. {"email":["An account with this email already exists."]}: our iexact check
+4. {"email":["Enter a valid email address."],"username":["A user with that username already exists."]}: all field errors in one response, so a form can highlight every problem at once
+
+Step 3: Register successfully (and try to sneak in is_staff)
+
+Send-Json POST "$api/auth/register/" @{ email = '  Ana.Silva@Example.COM '; username = 'ana'; password = 'Sunny-Garden-42'; first_name = 'Ana'; is_staff = $true }
+→ 201 {"id":...,"email":"ana.silva@example.com","username":"ana","first_name":"Ana","last_name":""}
+- The email was trimmed and lowercased.
+- There's no password in the response (write_only).
+- The id is probably 5 or higher: my rolled-back test used up ids 3 and 4 (sequence gaps, Lesson 3.4).
+
+Check the database directly:
+docker compose exec db psql -U shoplite -d shoplite -c "SELECT id, email, username, is_staff, left(password, 22) FROM accounts_user ORDER BY id;"
+Ana has is_staff = f and a pbkdf2_sha256$870000$... hash. The is_staff: true you sent was ignored.
+
+Step 4: Log in with different capitalisation, then call "me"
+
+$login = Invoke-RestMethod -Method Post -Uri "$api/auth/token/" -ContentType 'application/json' -Body (@{ email = 'ANA.SILVA@example.com'; password = 'Sunny-Garden-42' } | ConvertTo-Json)
+$anaAuth = @{ Authorization = "Bearer $($login.access)" }
+Send-Json GET "$api/auth/me/" -Headers $anaAuth
+- The login works despite the capitals, thanks to EmailTokenObtainPairSerializer.
+- -Body (...): the parentheses make PowerShell run the inner pipeline first and pass its result as the argument.
+- → 200 {"id":...,"email":"ana.silva@example.com","username":"ana","first_name":"Ana","last_name":"","is_staff":false,"date_joined":"..."}
+
+Step 5: Update the profile, and try to escalate
+
+Send-Json PATCH "$api/auth/me/" @{ last_name = 'Silva'; is_staff = $true; email = 'hacker@example.com' } -Headers $anaAuth
+Send-Json PUT "$api/auth/me/" @{ last_name = 'X' } -Headers $anaAuth
+Send-Json GET "$api/auth/me/"
+1. 200, with "last_name":"Silva", still "is_staff":false, and the same email. The read-only fields were ignored.
+2. 405 {"detail":"Method \"PUT\" not allowed."}: http_method_names
+3. 401 {"detail":"Authentication credentials were not provided."}: no token
+
+Step 6: Registration ignores a stale token
+
+Send-Json POST "$api/auth/register/" @{ email = 'bob@example.com'; username = 'bob'; password = 'Sunny-Garden-42' } -Headers @{ Authorization = 'Bearer this.is.garbage' }
+Send-Json GET "$api/auth/me/" -Headers @{ Authorization = 'Bearer this.is.garbage' }
+1. 201: authentication_classes = [] means the header is never examined. (Bob is a real account now, which is useful later as a second customer.)
+2. 401 ... "Token is invalid": on a normal endpoint, the same bad header is rejected.
+
+Step 7: Browsable API (optional)
+
+Open http://127.0.0.1:8000/api/auth/register/ in the browser. There's an HTML form with a masked Password box (style={'input_type': 'password'}), and no field for is_staff.
+Send-Json POST "$api/auth/register/" @{ email = 'CUSTOMER@Example
+3. {"email":["An account with this email already exists."]}: our iexact check
+4. {"email":["Enter a valid email address."],"username":["A user with that username already exists."]}: all field errors in one response, so a form can highlight every problem at once
+
+Step 3: Register successfully (and try to sneak in is_staff)
+
+Send-Json POST "$api/auth/register/" @{ email = '  Ana.Silva@Example.COM '; username = 'ana'; password = 'Sunny-Garden-42'; first_name = 'Ana'; is_staff = $true }
+→ 201 {"id":...,"email":"ana.silva@example.com","username":"ana","first_name":"Ana","last_name":""}
+- The email was trimmed and lowercased.
+- There's no password in the response (write_only).
+- The id is probably 5 or higher: my rolled-back test used up ids 3 and 4 (sequence gaps, Lesson 3.4).
+
+Check the database directly:
+docker compose exec db psql -U shoplite -d shoplite -c "SELECT id, email, username, is_staff, left(password, 22) FROM accounts_user ORDER BY id;"
+Ana has is_staff = f and a pbkdf2_sha256$870000$... hash. The is_staff: true you sent was ignored.
+
+- The login works despite the capitals, thanks to EmailTokenObtai
+
+Send-Json PATCH "$api/auth/me/" @{ last_name = 'Silva'; is_staff = $true; email = 'hacker@example.com' } -Headers $anaAuth
+Send-Json PUT "$api/auth/me/" @{ last_name = 'X' } -Headers $anaAuth
+Send-Json GET "$api/auth/me/"
+1. 200, with "last_name":"Silva", still "is_staff":false, and the same email. The read-only fields were ignored.
+2. 405 {"detail":"Method \"PUT\" not allowed."}: http_method_names
+3. 401 {"detail":"Authentication credentials were not provided."}: no token
+
+Step 6: Registration ignores a stale token
+
+Send-Json POST "$api/auth/register/" @{ email = 'bob@example.com'; username = 'bob'; password = 'Sunny-Garden-42' } -Headers @{ Authorization = 'Bearer this.is.garbage' }
+Send-Json GET "$api/auth/me/" -Headers @{ Authorization = 'Bearer this.is.garbage' }
+1. 201: authentication_classes = [] means the header is never examined. (Bob is a real account now, which is useful later as a second customer.)
+2. 401 ... "Token is invalid": on a normal endpoint, the same bad header is rejected.
+
+Step 7: Browsable API (optional)
+Step 8: Commit
+
+Stop the server, then:
+
+---
+
+❓ If something goes wrong
+
+┌──────────────────────────────────────────┬──────────────────────────────────────────┬───────────────────────────────────────────────────────────────┐
+│                 Symptom                  │                Root cause                │                              Fix                              │
+├──────────────────────────────────────────┼──────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+│ Register returns 201 but login fails     │ create() isn't using create_user(), so   │ Check create(); in psql, the password column must start with  │
+│                                          │ the password was stored as plain text    │ pbkdf2_sha256$                                                │
+├──────────────────────────────────────────┼──────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+│ 500 with ValidationError in the          │ Django's ValidationError isn't being     │ Check the try/except in validate() and the                    │
+│ traceback on a weak password             │ converted to DRF's                       │ DjangoValidationError import alias                            │
+├──────────────────────────────────────────┼──────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+│ ImportError: ...                         │                                          │ It must be                                                    │
+│ EmailTokenObtainPairSerializer at        │ A typo in the dotted path in SIMPLE_JWT  │ 'accounts.serializers.EmailTokenObtainPairSerializer'         │
+│ startup                                  │                                          │                                                               │
+├──────────────────────────────────────────┼──────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+│ Login with capitals fails                │ The TOKEN_OBTAIN_SERIALIZER setting is   │ Add it, then restart the server                               │
+│                                          │ missing                                  │                                                               │
+├──────────────────────────────────────────┼──────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+│ Send-Json prints 0 and an empty message  │ The server isn't running (no HTTP        │ Start runserver in Window 1                                   │
+│                                          │ response at all)
+1. the four lines from Step 2,
+2. the psql output from Step 3, and
