@@ -9,6 +9,7 @@ import { CheckoutPage } from '@/pages/CheckoutPage'
 import { HomePage } from '@/pages/HomePage'
 import { LoginPage } from '@/pages/LoginPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
+import { OrderDetailPage } from '@/pages/OrderDetailPage'
 import { OrdersPage } from '@/pages/OrdersPage'
 import { ProductDetailPage } from '@/pages/ProductDetailPage'
 import { ProductsPage } from '@/pages/ProductsPage'
@@ -35,6 +36,7 @@ export const router = createBrowserRouter([
           { path: 'cart', Component: CartPage },
           { path: 'checkout', Component: CheckoutPage },
           { path: 'orders', Component: OrdersPage },
+          { path: 'orders/:id', Component: OrderDetailPage },
           { path: 'account', Component: AccountPage },
         ],
       },

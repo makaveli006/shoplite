@@ -6752,3 +6752,106 @@ Step 5: Signing out forgets the cart
 Add something, then Sign out. The badge disappears immediately. Sign back in, and it reappears (the cart is stored on the server, per customer, Lesson 6.1).
 
 1. the red message from Step 1.4,
+
+
+
+
+Lesson 13.1 committed as 69c1dba.
+
+What & why
+
+The cart's Proceed to checkout button leads to a placeholder. This lesson finishes the most important journey in any shop: cart → checkout → "Thank you, your order is placed". Everything behind it already exists: the all-or-nothing checkout with stock protection (Lesson 7.3) and the confirmation email by the background worker (Phase 8). This lesson gives it a face.
+
+What happens now
+
+On the checkout page (/checkout, signed-in customers only):
+- Left: the shipping address form: full name (pre-filled from the account's first and last name), address, postal code, city, country, and an optional phone number. The browser can auto-fill these fields, because each one says what it's for.
+- Right: a summary of what you're buying (each line and the total), a note that no payment is taken now (the order starts as pending, and the shop confirms payment, as designed in Lesson 7.1), and the Place order button.
+- An empty cart, for example when the page is opened directly after an order was already placed in another tab, shows "Your cart is empty" instead of a form.
+
+When the customer presses Place order:
+1. The button changes to "Placing your order..." and can't be pressed again. A double click can't create two orders, and the server would refuse the second one anyway, because the cart is empty by then (Lesson 7.3).
+2. The server does the whole checkout in one go (Lesson 7.3): it checks stock again with the products "held", writes down the order with frozen prices, reduces stock, empties the cart, and only after all of that is saved queues the confirmation email (Lesson 8.1).
+3. Success: the customer lands on the order page with a green banner, "Thank you! Your order #14 has been placed. A confirmation email is on its way to ana.silva@example.com." The page appears instantly, because the checkout answer already contained the whole order, and we stored it before opening the page. Pressing Back doesn't return to the finished checkout form.
+4. Behind the scenes, the frontend marks as outdated everything the order changed: the cart (now empty, so the header badge disappears), the order list, and product data (the stock went down). Each is reloaded the next time it's shown.
+5. A few seconds later, the worker "sends" the email. It appears in its log, exactly as in Phase 8.
+
+When the order can't be placed (for example, someone else bought the last knife while this customer was typing their address):
+- A red box appears: "We couldn't place your order. Nothing was charged.", with the server's exact reasons, for example 'Only 0 of "Chef Knife" in stock, but your cart has 1.', and a Review your cart link.
+- Nothing was saved: no order, no stock change, and the cart is untouched (the all-or-nothing rule from Lesson 7.3).
+- The cart is reloaded, so its lines now show the problems, and Place order stays greyed out until the cart is fixed.
+- A missing or invalid address field shows the server's message under that field instead.
+
+The order page (/orders/14) shows:
+- the order number, the date and time, and a coloured status badge: Pending (amber), Paid (blue), Shipped (indigo), Delivered (green), Cancelled (grey, struck through)
+- each line with its quantity, name (a link to the product if it still exists), the price at the time of purchase, and the line total
+- the total and the shipping address
+
+It shows the snapshot from Lesson 7.2: if the admin changes the knife's price tomorrow, this page still shows what was actually paid. Only the order's owner can open it. Anyone else's order number shows "Order not found", just like the API (Lesson 7.4).
+
+What I built
+
+- The orders connection: place an order, list orders, get one order, and cancel (the last two are used in the next lesson), plus which remembered data to refresh after each
+- Type descriptions for orders and addresses
+- The checkout page, including its error messages and the empty-cart case
+- The order page, used both as the "thank you" confirmation and for viewing any past order
+- The coloured status badge, reused in the order list next lesson
+
+Tested: the TypeScript check, build, and lint pass. The browser steps below are the real test.
+
+---
+
+▶️ Your turn
+
+Check that everything is running:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+docker compose ps
+db, redis, and worker should be up. Django must be running in Window 1. Then:
+
+Window 2 (frontend):
+cd frontend
+npm run dev
+Window 3 (the worker's log, to watch the email):
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+docker compose logs -f --tail 0 worker
+
+Step 1: A successful order
+
+1. Sign in as Ana, add 2 × Gel Pen Set and 1 × Blue Ceramic Mug, open the cart, and click Proceed to checkout.
+2. The full name is already filled in (Ana Silva). Fill in the rest (any address).
+3. Click Place order. You'll see:
+   - the button says Placing your order... for a moment
+   - the order page opens with the green Thank you! banner and the order number
+   - the badge says Pending, and the lines and total are shown with the frozen prices
+   - the cart badge in the header has disappeared
+4. Look at Window 3. Within a second or two, the confirmation email for this order number appears, addressed to ana.silva@example.com.
+5. Press the browser's Back button. You go to the cart (now empty), not back into the checkout form.
+
+Step 2: The "last item" problem, in the browser
+
+1. In the admin, set the Bamboo Cutting Board's stock to 1.
+2. In the shop, add 1 × Bamboo Cutting Board to Ana's cart, go to checkout, and fill in the address, but don't press Place order yet.
+3. Now simulate another customer buying it first: in the admin, set its stock to 0.
+4. Back in the shop, press Place order. You'll see:
+   - the red box "We couldn't place your order. Nothing was charged.", with 'Only 0 of "Bamboo Cutting Board" in stock, but your cart has 1.'
+   - Place order is greyed out
+   - no email in Window 3
+5. Click Review your cart. The line shows "This product is out of stock." Remove it. Then set the board's stock back to 28 in the admin.
+
+Step 3: Missing field
+
+On checkout (with something in the cart), clear the City field and try Place order. The browser itself stops you with a hint on the empty field, because it's marked required. The server would refuse it too, but the browser catches it first.
+
+Step 4: Someone else's order
+
+Note Ana's order number from Step 1 (say 14). Sign out, sign in as Bob, and open http://localhost:5173/orders/14. You get Order not found.
+
+Step 5: Build and commit
+
+Stop the dev server (Ctrl+C in Window 2; also stop following the log in Window 3), then:
+npm run build
+cd ..
+git add frontend
+git commit -m "Checkout page with shipping form and error handling; order confirmation / detail page with status badge"
+
+---

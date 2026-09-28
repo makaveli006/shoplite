@@ -65,6 +65,39 @@ export interface Cart {
   updated_at: string
 }
 
+export type OrderStatus = 'pending' | 'paid' | 'shipped' | 'delivered' | 'cancelled'
+
+/** One line of an order: name and price are copies from the moment of purchase. */
+export interface OrderItem {
+  id: number
+  product: number | null // null if the product was deleted later
+  product_slug: string | null
+  product_name: string
+  unit_price: string
+  quantity: number
+  line_total: string
+}
+
+export interface ShippingAddress {
+  full_name: string
+  address: string
+  city: string
+  postal_code: string
+  country: string
+  phone: string
+}
+
+export interface Order extends ShippingAddress {
+  id: number
+  status: OrderStatus
+  status_display: string
+  total_amount: string
+  items: OrderItem[]
+  customer_email: string
+  created_at: string
+  updated_at: string
+}
+
 export interface Product {
   id: number
   name: string
