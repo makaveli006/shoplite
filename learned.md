@@ -4717,3 +4717,146 @@ exit()
 - Afterwards the cart is back to 2 items and 32.99.
 
 Compare this with Lesson 3.6, where deleting a category that still had products raised ProtectedError. Same kind of relationship, opposite rule, chosen for a different business need.
+
+
+
+
+Phase 6, Lesson 6.3: The cart API
+
+Lesson 6.2 checkpoint passed. The SQL shows both UNIQUE ("cart_id", "product_id") and CHECK ("quantity" >= 1), and temp.delete() removed the product and its cart item ({'cart.CartItem': 1, 'catalog.Product': 1}). Commit 060ef0f is in.
+
+What & why
+
+The cart tables exist, but only the admin can use them. The React shop needs endpoints to view the cart, add products, change quantities, remove lines, and empty the cart. This lesson builds all five from the design in Lesson 6.1.
+
+Files involved (written and tested)
+backend/
+├── cart/models.py        ← ✏️ small addition: each cart line can explain what's wrong with it ("issue")
+├── cart/serializers.py   ← NEW: how a cart looks as JSON, plus the rules for adding and changing items
+├── cart/views.py         ← ✏️ the endpoints
+├── cart/urls.py          ← NEW: cart/, cart/items/, cart/items/<id>/
+├── config/urls.py        ← ✏️ include the cart URLs under /api/
+└── tools/api-helpers.ps1 ← NEW: Send-Json and a login helper, loaded with one command
+
+What I built, in plain language
+
+Every cart endpoint answers with the whole cart. Whether you add a product, change a quantity, or remove a line, the response is always the complete, updated cart: every line with its product details, its line total, a total piece count (for the little badge on the cart icon), and the cart total. That makes the React side simple. After any change it just replaces what's on screen with what the server sent back. The cart is created automatically the first time a customer uses any of these endpoints, as planned in Lesson 6.1.
+
+"My cart" comes from the login token, never from the URL. Just like /api/auth/me/ in Lesson 5.2, /api/cart/ looks up the cart belonging to whoever the token says you are. Cart items do have ids in their URLs (/api/cart/items/5/), but the lookup only searches inside your own cart. If Bob tries to change the customer's item, he gets a 404, as if it didn't exist. That's the same "don't even reveal it exists" approach as hidden products in Lesson 4.3. All five endpoints require login, so anonymous visitors get 401.
+
+Adding a product that's already in the cart raises its quantity. The add endpoint accepts a product id and an optional quantity (default 1). If the product is already in your cart, the existing line's quantity goes up, and the answer is 200. If it's new, a line is created, and the answer is 201, the status for "created" from Lesson 4.3. Only products that are visible in the shop can be added. A hidden product gives a clear message instead of a technical one.
+
+Stock is checked at the moment you add or change a quantity. When adding, the check counts what's already in your cart plus what you're adding, so the message can say "Only 5 of "Chef Knife" in stock. You already have 3 in your cart." Out-of-stock products are refused, and changing a line to more than the stock is refused too. Each time, you get a 400 with a readable message, following our Lesson 4.2 rule that anything a customer can get wrong must be a 400, never a crash.
+
+Problems that appear later are shown, not hidden. Stock can drop, or an admin can hide a product, after it's already in your cart. The cart then keeps the line but adds an issue message to it, like "This product is out of stock." or "Only 2 left in stock.", and sets has_issues: true on the cart. I put the logic that decides the message into the CartItem model itself, so the cart API now and the checkout in Phase 7 use exactly the same rules. Checkout will refuse a cart that has issues.
+
+These views are written in a more manual style. For the catalog we used ViewSets, where the router generates everything (Lesson 4.3). The cart doesn't fit that pattern: there's no list of carts, no cart id in the URL, and "add" sometimes updates instead of creating. So I used DRF's basic APIView, where you write a method for each HTTP verb (get, post, patch, delete) and decide exactly what each one does. You now know three levels of DRF views: basic APIView (full control), generic views (Lessons 4.1 and 5.2), and ViewSets (Lesson 4.3). Real projects mix them, as ours now does.
+
+Performance: loading a cart takes 4 database queries no matter how many items it has. The cart and all its items and products are loaded in groups, which avoids the N+1 problem from Lesson 3.6. I measured this with the customer's two-item cart.
+
+The helper script: tools/api-helpers.ps1 contains Send-Json (from Lesson 5.2) and a new Get-AuthHeader that logs in and returns the Authorization header in one line. You load it into any PowerShell window with a single command (Step 1), instead of pasting functions each time.
+
+What my test showed (inside a transaction that was undone afterwards):
+
+┌─────────────────────────────────────────────────────────┬────────────────────────────────────────────────────────────────┐
+│                         Action                          │                             Result                             │
+├─────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────┤
+│ Anonymous GET /api/cart/                                │ 401                                                            │
+├─────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────┤
+│ Bob's first GET                                         │ 200, empty cart, total 0.00                                    │
+├─────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────┤
+│ Add Chef Knife ×2, then ×1 more                         │ 201 → quantity 2; then 200 → quantity 3 (same line)            │
+├─────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────┤
+│ Add ×5 more                                             │ 400 Only 5 ... You already have 3 in your cart.                │
+├─────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────┤
+│ Add Linen Cushion Cover / Discontinued mug / quantity 0 │ 400 out of stock / not available / at least 1                  │
+├─────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────┤
+│ PATCH quantity 99, then 1                               │ 400 Only 5..., then 200                                        │
+├─────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────┤
+│ Bob changes or deletes the customer's item              │ 404, 404                                                       │
+├─────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────┤
+│ Knife stock set to 0 afterwards                         │ the line shows This product is out of stock., has_issues: true │
+└─────────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────┘
+
+One side effect: the final check I ran for the "not available" message created an empty cart for Bob (carts are created on first use), and it stayed. That's harmless, and he'd get one on first use anyway.
+
+---
+
+▶️ Your turn
+
+Window 1:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py check
+uv run python manage.py runserver
+
+Step 1: Load the helpers and log in two customers (Window 2)
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+. .\tools\api-helpers.ps1
+$bob  = Get-AuthHeader 'bob@example.com' 'Sunny-Garden-42'
+$cust = Get-AuthHeader 'customer@example.com' 'YOUR_CUSTOMER_PASSWORD'
+$knife = (Invoke-RestMethod "$api/products/chef-knife/").id
+$mug   = (Invoke-RestMethod "$api/products/blue-ceramic-mug/").id
+$linen = (Invoke-RestMethod "$api/products/linen-cushion-cover/").id
+"knife=$knife mug=$mug linen=$linen"
+The dot and space at the start of . .\tools\api-helpers.ps1 matter. They mean "run this script inside my current window," so the functions and $api stay available afterwards. Without the dot, the script runs in a separate scope and everything it defines disappears when it finishes. The last lines look up product ids by slug, so you don't have to remember numbers.
+
+Step 2: Look at an empty cart, then fill it
+
+Send-Json GET "$api/cart/"
+Send-Json GET "$api/cart/" -Headers $bob
+Send-Json POST "$api/cart/items/" @{ product_id = $knife; quantity = 2 } -Headers $bob
+Send-Json POST "$api/cart/items/" @{ product_id = $knife } -Headers $bob
+Send-Json POST "$api/cart/items/" @{ product_id = $mug; quantity = 4 } -Headers $bob
+1. 401: no token
+2. 200, Bob's empty cart: "items":[], "total":"0.00"
+3. 201: Chef Knife, quantity 2, line_total 99.98
+4. 200 (not 201): the same line, now quantity 3
+5. 201: the mug is added as a second line; item_count is 7 and total is 199.97
+
+Step 3: The rules
+
+Send-Json POST "$api/cart/items/" @{ product_id = $knife; quantity = 5 } -Headers $bob
+Send-Json POST "$api/cart/items/" @{ product_id = $linen } -Headers $bob
+Send-Json POST "$api/cart/items/" @{ product_id = 999999 } -Headers $bob
+Send-Json POST "$api/cart/items/" @{ product_id = $mug; quantity = 0 } -Headers $bob
+All four are 400:
+1. Only 5 of "Chef Knife" in stock. You already have 3 in your cart.
+2. "Linen Cushion Cover" is out of stock.
+3. This product does not exist or is no longer available.
+4. Ensure this value is greater than or equal to 1.
+
+Step 4: Change and remove lines
+
+Get the line ids from Bob's cart first:
+$cart = Invoke-RestMethod "$api/cart/" -Headers $bob
+$cart.items | Select-Object id, @{n='product'; e={$_.product.name}}, quantity, line_total
+$knifeLine = ($cart.items | Where-Object { $_.product.slug -eq 'chef-knife' }).id
+$mugLine   = ($cart.items | Where-Object { $_.product.slug -eq 'blue-ceramic-mug' }).id
+Send-Json PATCH "$api/cart/items/$knifeLine/" @{ quantity = 99 } -Headers $bob
+Send-Json PATCH "$api/cart/items/$knifeLine/" @{ quantity = 1 } -Headers $bob
+Send-Json DELETE "$api/cart/items/$mugLine/" -Headers $bob
+→ 400 Only 5 of "Chef Knife" in stock., then 200 with the knife at quantity 1, then 200 with the mug line gone and the total 49.99.
+
+Step 5: Nobody can touch another customer's cart
+
+$custLine = (Invoke-RestMethod "$api/cart/" -Headers $cust).items[0].id
+Send-Json PATCH "$api/cart/items/$custLine/" @{ quantity = 1 } -Headers $bob
+Send-Json DELETE "$api/cart/items/$custLine/" -Headers $bob
+Send-Json GET "$api/cart/" -Headers $cust
+→ 404, 404, and the customer's cart is unchanged: still the 2 mugs and the gel pens from Lesson 6.2, total 32.99.
+
+Step 6: A problem that appears after adding
+
+As admin, hide the Chef Knife while it's in Bob's cart:
+$admin = Get-AuthHeader 'subin@ontash.net' 'YOUR_ADMIN_PASSWORD'
+Send-Json PATCH "$api/products/chef-knife/" @{ is_active = $false } -Headers $admin
+(Invoke-RestMethod "$api/cart/" -Headers $bob) | Select-Object has_issues, total
+(Invoke-RestMethod "$api/cart/" -Headers $bob).items | Select-Object quantity, issue
+Send-Json PATCH "$api/products/chef-knife/" @{ is_active = $true } -Headers $admin
+While the knife is hidden, Bob's cart still contains it, but has_issues is True and the line says This product is no longer available. The last line makes the knife visible again, and the issue disappears.
+
+Step 7: Empty the cart
+
+Send-Json DELETE "$api/cart/" -Headers $bob
+→ 200 with an empty cart. Open Carts in the admin: Bob's cart still exists, with 0 items and a fresh updated at time.

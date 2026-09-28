@@ -53,3 +53,14 @@ class CartItem(models.Model):
     @property
     def line_total(self):
         return self.product.price * self.quantity
+
+    @property
+    def issue(self):
+        """Why this line can't be bought right now, or None if it's fine."""
+        if not self.product.is_active:
+            return 'This product is no longer available.'
+        if self.product.stock == 0:
+            return 'This product is out of stock.'
+        if self.quantity > self.product.stock:
+            return f'Only {self.product.stock} left in stock.'
+        return None
