@@ -9,7 +9,7 @@ export default defineConfig({
   resolve: {
     alias: {
       // "@/components/ui/button" means "src/components/ui/button", from any file.
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(import.meta.dirname, './src'),
     },
   },
 })

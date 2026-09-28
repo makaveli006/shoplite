@@ -6055,3 +6055,137 @@ TypeScript checks every file, including the eleven new components, and Vite buil
 (If you run npm run lint, you'll see two warnings about button.tsx and badge.tsx. They're harmless notes about how those shadcn files are organised, not errors, and we'll leave the files as shadcn made them.)
 
 Step 7: Resume OneDrive and commit
+
+
+
+
+
+
+Phase 11, Lesson 11.1: Pages and navigation with React Router
+
+Lesson 10.2 checkpoint passed: shadcn's setup found Vite, Tailwind v4, and the @ shortcut; the 11 components were created; and the build and lint succeeded (the two lint warnings are the harmless ones I mentioned). Commit 0dd191a is in.
+
+One thing from your output: Vite printed a notice that our settings file used an older way of saying "this folder", which a future Vite version won't support. My setup followed shadcn's guide, which still uses the old way. I've switched it to the newer one Vite suggested, so the notice is gone.
+
+What & why
+
+Right now the shop is one screen. A real shop has many: the home page, the product list, a page per product, the cart, sign-in, and registration. Each should have its own web address, so that:
+- customers can bookmark a product or share its link (/products/chef-knife)
+- the browser's Back and Forward buttons work as expected
+- refreshing the page keeps you where you were
+
+Our frontend is a single-page application. The browser loads one HTML page once, and after that React swaps what's shown depending on the web address, without ever reloading the page. So moving between pages is instant, and anything already loaded (later: your login, your cart) stays in memory. React Router is the piece that watches the address, picks the right page to show, and makes links change the address without a reload.
+
+What happens now
+
+- A shared frame around every page. The header (ShopLite, Products, Sign in, cart button) and the footer are drawn once, in a layout. Only the middle part changes when you move between pages. That's why the header never flickers.
+- An address list decides which page appears:
+
+| Address                                           | Page                                                                                                                                      |
+|---------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| /                                                 | Home (the welcome page from Lesson 10.2)                                                                                                  |
+| /products                                         | Product list (placeholder until Lesson 11.2)                                                                                              |
+| /products/chef-knife, /products/wireless-mouse, … | Product page, for any product. The last part of the address is a variable that the page reads, so one page design serves all 20 products. |
+| /cart, /login, /register                          | Placeholders until Phases 12–13                                                                                                           |
+| anything else                                     | a friendly "404 Page not found" with a way back home                                                                                      |
+
+- Clicking a link doesn't reload the page. React Router changes the address and swaps the middle part. The browser still records each step in its history, so Back and Forward work.
+- The current section is highlighted in the header. On any product page, "Products" is highlighted, so customers always know where they are.
+- Each new page starts at the top, while Back and Forward return you to where you were scrolled.
+- Refreshing or typing an address directly works. Vite's development server always answers with our one HTML page, whatever the address, and React Router then shows the matching page. A real web host needs the same "always answer with the app" rule, and we'll set that up when deploying.
+- The welcome page's buttons now work: Browse products goes to /products, and Create an account goes to /register.
+
+What I built
+
+- A layout (header, footer, and the space where pages appear) and the header with highlighted links
+- Seven pages: home (the welcome content, moved out of the old single file), products, product detail, cart, sign in, register, and 404. The unfinished ones use a small shared "placeholder" card that says which lesson will build them. The products placeholder has three sample links so you can try product addresses before the real list exists.
+- The address list (which page for which address), and the start-up file now hands control to React Router
+- Removed the old single-screen file, since its content now lives in the home page
+
+Version note: installing React Router today gives version 8.4, the current release. Our plan just said "React Router". The features we use work as I described, and I verified them in my trial project and in a real browser.
+
+---
+
+▶️ Your turn
+
+Step 1: Install React Router
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\frontend"
+npm install react-router
+npm ls react-router
+→ react-router@8.4.x. (Only one package. React Router ships everything in it.)
+
+Step 2: Start the app and move around
+
+npm run dev
+The Vite notice about the settings file is gone. Open http://localhost:5173 and press F12, then switch to the Network tab.
+
+1. Click Browse products. The address changes to /products, the header stays, and the middle shows the Products placeholder with three sample links. Products in the header is highlighted.
+2. In the Network tab, look at the Type column: while you click around, no new "document" appears. The page is never reloaded; only the middle part changes.
+3. Click /products/chef-knife. The card says Product: chef-knife, and "Products" stays highlighted. Try the other two samples: the same page shows a different product name each time.
+4. Press the browser's Back button twice. You go back through the product pages to the list, exactly as on any normal website.
+5. Click the cart icon, then Sign in, then its Create one link, then the ShopLite logo (home).
+
+Step 3: Typed addresses, refresh, and 404
+
+1. Type http://localhost:5173/products/wireless-mouse directly into the address bar and press Enter. It shows Product: wireless-mouse.
+2. Press F5 (refresh). You stay on the same page.
+3. Type http://localhost:5173/nothing-here. You get the 404 – Page not found page with a Go to the home page button. The header is still there, so the customer isn't lost.
+4. Try the old shop idea: http://localhost:5173/products/any-name-at-all. It shows Product: any-name-at-all. The page accepts any name for now. In Lesson 11.3, once it loads real data from the API, an unknown product will show a proper "product not found" message.
+
+Step 4: Scroll position
+
+Make the window short (or zoom in) so the home page scrolls. Scroll to the bottom, click Products in the header, and notice the new page starts at the top. Press Back, and you're returned to the bottom of the home page, where you were.
+
+Step 5: Build and commit
+
+Stop the dev server (Ctrl+C):
+npm run build
+cd ..
+git status
+git add frontend
+git commit -m "React Router: layout with header, pages for home, products, product detail, cart, login, register and 404"
+
+---
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\frontend"
+npm install react-router
+npm ls react-router
+→ react-router@8.4.x. (Only one package. React Router ships everything in it.)
+
+Step 2: Start the app and move around
+
+npm run dev
+The Vite notice about the settings file is gone. Open http://localhost:5173 and press F12, then switch to the Network tab.
+
+1. Click Browse products. The address changes to /products, the header stays, and the middle shows the Products placeholder with three sample links. Products in the header is highlighted.
+2. In the Network tab, look at the Type column: while you click around, no new "document" appears. The page is never reloaded; only the middle part changes.
+3. Click /products/chef-knife. The card says Product: chef-knife, and "Products" stays highlighted. Try the other two samples: the same page shows a different product name each time.
+4. Press the browser's Back button twice. You go back through the product pages to the list, exactly as on any normal website.
+5. Click the cart icon, then Sign in, then its Create one link, then the ShopLite logo (home).
+
+Step 3: Typed addresses, refresh, and 404
+
+1. Type http://localhost:5173/products/wireless-mouse directly into the address bar and press Enter. It shows Product: wireless-mouse.
+2. Press F5 (refresh). You stay on the same page.
+3. Type http://localhost:5173/nothing-here. You get the 404 – Page not found page with a Go to the home page button. The header is still there, so the customer isn't lost.
+4. Try the old shop idea: http://localhost:5173/products/any-name-at-all. It shows Product: any-name-at-all. The page accepts any name for now. In Lesson 11.3, once it loads real data from the API, an unknown product will show a proper "product not found" message.
+
+Step 4: Scroll position
+
+Make the window short (or zoom in) so the home page scrolls. Scroll to the bottom, click Products in the header, and notice the new page starts at the top. Press Back, and you're returned to the bottom of the home page, where you were.
+git add frontend
+git commit -m "React Router: layout with header, pages for home, products, product detail, cart, login, register and 404"
+
+---
+
+❓ If something goes wrong
+
+│ shows a new "document")                                  │ React Router link                      │ React Router's links.                          │
+├──────────────────────────────────────────────────────────┼────────────────────────────────────────┼────────────────────────────────────────────────┤
+│ Port 5173 is in use                                      │ An old npm run dev is still running in │ Close it with Ctrl+C                           │
+│                                                          │  another window                        │                                                │
+└──────────────────────────────────────────────────────────┴────────────────────────────────────────┴────────────────────────────────────────────────┘
+
+---
+
