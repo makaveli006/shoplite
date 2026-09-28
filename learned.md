@@ -6640,3 +6640,115 @@ Step 7: Back to normal
 In Window 1: Ctrl+C, then:
 Remove-Item Env:JWT_ACCESS_MINUTES
 uv run python manage.py runserver
+
+
+
+
+
+Phase 13, Lesson 13.1: Add to cart, the cart badge, and the cart page
+
+Lesson 12.2 committed as bf126a8. If you haven't tried Step 6 from that lesson (the "session expired" message) yet, it's worth doing some time. It's the one path I couldn't finish testing myself.
+
+What & why
+
+Signed-in customers can now see products, but they still can't buy anything: the button says "Add to cart (Phase 13)" and the cart page is a placeholder. This lesson connects the shop's buying flow to the cart API from Phase 6:
+- Add to cart on the product page, with the chosen quantity
+- a little number on the cart icon in the header, showing how many pieces are in the cart, on every page
+- a real cart page: see your items, change quantities, remove lines, empty the whole cart, see problems, and go on to checkout
+
+What happens now
+
+Adding a product:
+1. On a product page, a signed-in customer picks a quantity and clicks Add to cart. The button shows "Adding..." and can't be clicked twice.
+2. The shop sends the product and quantity to the API. The API checks the stock again (Lesson 6.3), because the page may be minutes old and someone else may have bought the last ones meanwhile.
+3. Success: a message pops up, "Added 2 × Chef Knife to your cart.", with a View cart button inside it. The quantity picker goes back to 1, and the number on the cart icon goes up immediately.
+4. Too many: the API's own sentence is shown as a red message, for example 'Only 5 of "Chef Knife" in stock. You already have 4 in your cart.' The cart stays unchanged.
+
+Why the badge updates instantly, without any extra loading:
+- Every cart answer from the API contains the whole, updated cart (we designed it that way in Lesson 6.3). The frontend simply replaces its remembered cart with that answer.
+- The header's badge and the cart page both show that one remembered cart, so both change at the same moment.
+- This is the same memory from Lesson 11.2. The cart is just one more thing stored in it, and only for signed-in customers. Visitors never load a cart. After signing out, the remembered cart is forgotten (Lesson 12.1), so the next person doesn't see it.
+
+On the cart page:
+- Each line shows the picture, the name (a link back to the product), the price each, the line total, a quantity picker, and Remove.
+- Changing a quantity saves immediately. While it's saving, that line fades slightly. The picker won't go above the stock. If the API refuses anyway (the stock changed meanwhile), the red message explains why.
+- Remove takes a line out, with a short message "Chef Knife was removed from your cart."
+- Problems the API reports on a line (Lesson 6.3), such as "Only 2 left in stock." or "This product is no longer available.", appear in red on that line. While any line has a problem, Proceed to checkout is greyed out, with a note explaining why. Checkout would refuse such a cart anyway (Lesson 7.3), but it's better to show the reason here. If you have more in the cart than the stock, the − button still works so you can lower it.
+- The summary shows the number of pieces and the total, calculated by the server from current prices (Lesson 6.1).
+- Empty cart first opens a confirmation dialog, "Empty your cart? All items will be removed. This can't be undone.", with Keep my items and Empty cart buttons. It's the shadcn/Radix dialog from Lesson 10.2: the keyboard stays inside it, and Esc closes it.
+- An empty cart shows "Your cart is empty" and a Browse products button.
+- Proceed to checkout opens /checkout, a placeholder until the next lesson.
+
+What I built
+
+- The cart connection: view, add, change quantity, remove, empty, plus the rule "store the server's answer as the new cart"
+- A type description of the cart, matching the backend's JSON
+- The Add to cart button, with its messages
+- The badge on the header's cart icon
+- The cart page, with its lines, summary, problem messages, empty state, and confirmation dialog
+- A small helper that picks the most useful sentence from an API error, so red messages show the API's own words
+- A placeholder checkout page, open to signed-in customers only
+
+Tested: the TypeScript check, build, and lint pass. I haven't clicked through it in a browser this time, so the steps below are the real test.
+
+---
+
+▶️ Your turn
+
+Django and the worker running (docker compose ps should show worker up); in the frontend window:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\frontend"
+npm run dev
+
+Step 1: Add to cart
+
+1. Sign in as Ana and open the Chef Knife.
+2. Set the quantity to 2 and click Add to cart. You get "Added 2 × Chef Knife to your cart.", and the cart icon shows 2.
+3. Add 2 more. The badge shows 4.
+4. Try 2 more again. With only 5 in stock, you get the red message 'Only 5 of "Chef Knife" in stock. You already have 4 in your cart.' and the badge stays at 4.
+5. Open the Blue Ceramic Mug, add 1, and click View cart inside the pop-up message.
+
+Step 2: The cart page
+
+1. You see two lines (knife ×4, mug ×1), each with its line total, and the summary shows 5 items and the total.
+2. Click + on the mug. The line fades briefly, and the line total, the summary total, and the header badge all change together.
+3. On the knife, + stops at 5 (the stock).
+4. Click Remove on the mug. The line disappears with a message.
+5. Press F12 → Network → Fetch/XHR and change a quantity again. There's exactly one request (PATCH .../cart/items/.../), and no separate "reload the cart" request afterwards. The answer already contained the whole cart.
+
+Step 3: A problem appearing later
+
+Keep the cart page open with the knife in it. In a second tab, open the Django admin (http://127.0.0.1:8000/admin/), sign in with your admin account, and set the Chef Knife's stock to 2. Back in the shop tab, switch away and back (or wait a little). The cart is re-checked:
+- the knife line says "Only 2 left in stock." in red
+- Proceed to checkout is greyed out, with the note underneath
+
+Lower the knife to 2 with −. The red text and the note disappear, and the button works again. Set the stock back to 5 in the admin afterwards.
+
+Step 4: Empty the cart
+
+Click Empty cart. The dialog opens. Press Esc, and it closes with nothing changed. Click it again, then Empty cart in the dialog. You see "Your cart is empty", and the badge disappears.
+
+Step 5: Signing out forgets the cart
+
+Add something, then Sign out. The badge disappears immediately. Sign back in, and it reappears (the cart is stored on the server, per customer, Lesson 6.1).
+
+Step 6: Build and commit
+
+Stop the dev server, then:
+npm run build
+cd ..
+git add frontend
+git commit -m "Frontend cart: add to cart, header badge, cart page with quantities, removal, issues and empty-cart dialog"
+- the knife line says "Only 2 left in stock." in red
+- Proceed to checkout is greyed out, with the note underneath
+
+Lower the knife to 2 with −. The red text and the note disappear, and the button works again. Set the stock back to 5 in the admin afterwards.
+
+Step 4: Empty the cart
+
+Click Empty cart. The dialog opens. Press Esc, and it closes with nothing changed. Click it again, then Empty cart in the dialog. You see "Your cart is empty", and the badge disappears.
+
+Step 5: Signing out forgets the cart
+
+Add something, then Sign out. The badge disappears immediately. Sign back in, and it reappears (the cart is stored on the server, per customer, Lesson 6.1).
+
+1. the red message from Step 1.4,

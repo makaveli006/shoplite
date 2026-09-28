@@ -90,6 +90,15 @@ export function getErrorMessage(error: unknown): string {
   return 'Something went wrong.'
 }
 
+/**
+ * One sentence for any failed request: the first field message of a 400 answer
+ * (e.g. 'Only 5 of "Chef Knife" in stock.'), otherwise the general message.
+ */
+export function getFirstErrorMessage(error: unknown): string {
+  const first = Object.values(getFieldErrors(error)).flat()[0]
+  return typeof first === 'string' ? first : getErrorMessage(error)
+}
+
 /** Field-by-field messages from a 400 answer, e.g. { email: ["An account with this email already exists."] } */
 export function getFieldErrors(error: unknown): Record<string, string[]> {
   if (isAxiosError(error) && error.response?.status === 400 && typeof error.response.data === 'object') {

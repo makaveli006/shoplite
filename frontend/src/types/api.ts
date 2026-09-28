@@ -35,6 +35,36 @@ export interface Category extends CategorySummary {
   description: string
 }
 
+/** The product details shown on a cart line. */
+export interface CartProduct {
+  id: number
+  name: string
+  slug: string
+  price: string
+  stock: number
+  image: string | null
+  is_active: boolean
+}
+
+export interface CartItem {
+  id: number
+  product: CartProduct
+  quantity: number
+  line_total: string
+  issue: string | null // e.g. "Only 2 left in stock." or null when the line is fine
+  added_at: string
+}
+
+/** GET /api/cart/ (and every cart change) returns the whole cart. */
+export interface Cart {
+  id: number
+  items: CartItem[]
+  item_count: number
+  total: string
+  has_issues: boolean
+  updated_at: string
+}
+
 export interface Product {
   id: number
   name: string

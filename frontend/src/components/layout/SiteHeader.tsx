@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { displayName, useAuth } from '@/auth/useAuth'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useCart } from '@/hooks/useCart'
 import { cn } from '@/lib/utils'
 
 // NavLink tells us whether its page is the one currently open, so we can highlight it.
@@ -18,6 +19,8 @@ function navLinkClass({ isActive }: { isActive: boolean }) {
 export function SiteHeader() {
   const { user, status, logout } = useAuth()
   const navigate = useNavigate()
+  const cart = useCart()
+  const itemCount = cart.data?.item_count ?? 0 // number of pieces, for the badge on the cart icon
 
   function signOut() {
     logout()
@@ -63,9 +66,14 @@ export function SiteHeader() {
             </>
           )}
 
-          <Button asChild variant="outline" size="icon" aria-label="Cart">
+          <Button asChild variant="outline" size="icon" className="relative" aria-label={`Cart, ${itemCount} items`}>
             <Link to="/cart">
               <ShoppingCart />
+              {itemCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+                  {itemCount}
+                </span>
+              )}
             </Link>
           </Button>
         </nav>

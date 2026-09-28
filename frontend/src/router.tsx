@@ -5,6 +5,7 @@ import { RootLayout } from '@/components/layout/RootLayout'
 import { AccountPage } from '@/pages/AccountPage'
 import { AdminHomePage } from '@/pages/admin/AdminHomePage'
 import { CartPage } from '@/pages/CartPage'
+import { CheckoutPage } from '@/pages/CheckoutPage'
 import { HomePage } from '@/pages/HomePage'
 import { LoginPage } from '@/pages/LoginPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
@@ -32,6 +33,7 @@ export const router = createBrowserRouter([
         Component: RequireAuth,
         children: [
           { path: 'cart', Component: CartPage },
+          { path: 'checkout', Component: CheckoutPage },
           { path: 'orders', Component: OrdersPage },
           { path: 'account', Component: AccountPage },
         ],

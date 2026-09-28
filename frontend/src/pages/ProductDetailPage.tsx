@@ -1,7 +1,8 @@
 import { isAxiosError } from 'axios'
-import { AlertCircle, ChevronRight, ImageOff, PackageX } from 'lucide-react'
+import { AlertCircle, ChevronRight, ImageOff, PackageX, ShoppingCart } from 'lucide-react'
 import { useState } from 'react'
-import { Link, useLocation, useParams } from 'react-router'
+import { Link, useLocation, useNavigate, useParams } from 'react-router'
+import { toast } from 'sonner'
 
 import { useAuth } from '@/auth/useAuth'
 import { QuantityPicker } from '@/components/products/QuantityPicker'
@@ -9,8 +10,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAddToCart } from '@/hooks/useCart'
 import { useProduct } from '@/hooks/useCatalog'
-import { getErrorMessage } from '@/lib/api'
+import { getErrorMessage, getFirstErrorMessage } from '@/lib/api'
 import { formatPrice } from '@/lib/format'
 import type { Product } from '@/types/api'
 
@@ -34,7 +36,25 @@ export function ProductDetailPage() {
 function ProductDetails({ product }: { product: Product }) {
   const [quantity, setQuantity] = useState(1)
   const location = useLocation()
+  const navigate = useNavigate()
   const { user } = useAuth()
+  const addMutation = useAddToCart()
+
+  function addThisToCart() {
+    addMutation.mutate(
+      { productId: product.id, quantity },
+      {
+        onSuccess: () => {
+          toast.success(`Added ${quantity} × ${product.name} to your cart.`, {
+            action: { label: 'View cart', onClick: () => navigate('/cart') },
+          })
+          setQuantity(1)
+        },
+        // e.g. 'Only 5 of "Chef Knife" in stock. You already have 4 in your cart.'
+        onError: (error) => toast.error(getFirstErrorMessage(error)),
+      },
+    )
+  }
 
   return (
     <article className="flex flex-col gap-6">
@@ -80,10 +100,10 @@ function ProductDetails({ product }: { product: Product }) {
           {product.in_stock ? (
             <div className="flex flex-wrap items-center gap-3">
               <QuantityPicker value={quantity} max={product.stock} onChange={setQuantity} />
-              {/* Adding to the cart needs a logged-in customer. The real "Add to cart" arrives in Phase 13. */}
+              {/* Adding to the cart needs a logged-in customer. */}
               {user ? (
-                <Button size="lg" disabled>
-                  Add to cart (Phase 13)
+                <Button size="lg" onClick={addThisToCart} disabled={addMutation.isPending}>
+                  <ShoppingCart /> {addMutation.isPending ? 'Adding...' : 'Add to cart'}
                 </Button>
               ) : (
                 <Button asChild size="lg">
