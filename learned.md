@@ -5354,3 +5354,146 @@ Open http://127.0.0.1:8000/admin/ → Orders.
 2. Tick #6, choose "Cancel selected orders (returns stock)", and click Go. It's cancelled, and the cutting board's stock goes back up by 1. Check with (Invoke-RestMethod "$api/products/bamboo-cutting-board/").stock in Window 2. It was 28 after the two race demos, and it's 29 now.
 3. Open order #7 → History (top right). You'll see "Status changed to delivered.", with your admin account and the time.
 4. Try the By status filter on the right: Cancelled shows #5 and #6, and Delivered shows #7.
+
+
+
+when Redis is down (I cleaned up both test orders). Here's the lesson.
+
+Phase 8, Lesson 8.1: Background jobs, part 1 (queuing the confirmation email)
+
+Lesson 7.4 checkpoint passed. Bob's cancel returned the stock (3→5 knives, 17→20 mugs), cancelling twice was refused, Bob couldn't change a status, pending→delivered was refused, paid→shipped worked, and Bob couldn't cancel a shipped order. Commit 47ec44e is in. (You skipped the admin-buttons step. That's fine; you can try it any time.)
+
+🎉 Phase 7 is complete. Now Phase 8: background jobs.
+
+What & why
+
+When a customer places an order, they should receive a confirmation email. The obvious approach is to send it during checkout, before answering the customer. But sending an email means talking to a mail server somewhere on the internet, which can take a second or two, sometimes much longer, and sometimes fails. The customer would stare at a spinning "Placing order…" button, and if the mail server is down, their checkout might even fail, although nothing is wrong with their order.
+
+Real shops split the work instead:
+1. Checkout writes a short note, "send the confirmation for order #10", into a waiting line, and answers the customer immediately.
+2. A separate helper program, the worker, keeps watching that line, picks up each note, and does the slow work (sending the email) on its own time. If sending fails, it tries again later.
+
+The customer's checkout stays fast and reliable, and slow or unreliable work happens in the background. The same idea is used for things like resizing images, generating invoices, or sending shipping notifications.
+
+In our project:
+- The waiting line is Redis, the small program already running in Docker since Phase 1.
+- The worker is Celery, a widely used tool for exactly this job.
+
+In this lesson we make checkout put notes into the line, and we look at them waiting there. In the next lesson we start the worker in Docker and watch it pick them up.
+
+What happens now when a customer places an order
+
+1. Checkout runs exactly as in Lesson 7.3: everything is saved together, or nothing is.
+2. Only after the order is really saved, a note is put into Redis: "send the confirmation for order #N". Why wait for the save?
+   - If checkout failed and everything was undone, there's no order, so no email may be sent about it.
+   - The worker is fast. If the note were added before the save finished, the worker could pick it up and look for an order that isn't in the database yet.
+
+   Waiting until after the save avoids both problems.
+3. The customer gets their answer right away. Adding the note takes a fraction of a second: my test checkout took 0.3 seconds in total.
+4. Later, the worker reads the order and "sends" the email. In development, emails are printed on the screen instead of really being sent, so you'll see the whole email text in the worker's output, and nobody receives test emails by accident. Switching to a real mail service later is only a settings change.
+5. If sending fails (for example, the mail server is unreachable), the worker tries again, waiting a little longer each time (1, 2, 4… seconds), up to 5 times.
+
+What if Redis itself is down? I tested that too, by pointing the shop at a Redis that doesn't exist. The order still succeeds. The customer never loses an order because of an email problem. The failure is written to the server's error log. But there are two honest limitations:
+- that checkout took about 4 seconds, because the shop kept retrying to reach Redis before giving up
+- that email is lost
+
+Big shops avoid losing it by first recording "email still to send" in the database itself. That's more than we need here, but worth knowing about.
+
+What I added
+
+- The Celery setup for the project: it tells Celery where Redis is, and lets it find background jobs in any app.
+- The "send order confirmation" job in the orders app. It builds a plain-text email with the order number, each line, the total, and the shipping address, and sends it to the customer.
+- Checkout now adds that job to the waiting line after a successful save.
+- Settings in .env for the Redis address and for "print emails instead of sending them", plus the sender name ShopLite orders@shoplite.local.
+
+---
+
+▶️ Your turn
+
+Step 1: Install Celery with its Redis support (Window 1)
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv add "celery[redis]"
+uv run python manage.py check
+uv run python manage.py runserver
+- Expect celery 5.6.3, redis 6.4.0, and several helper packages that Celery needs (kombu, billiard, vine, …). Celery brings along everything it needs to talk to Redis.
+- The quotes around celery[redis] stop PowerShell from misreading the square brackets, just like psycopg[binary] in Lesson 2.1.
+- check → no issues.
+
+Step 2: Look at the empty waiting line (Window 2)
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+docker compose exec redis redis-cli LLEN celery
+→ (integer) 0. celery is the name of the waiting line inside Redis, and LLEN asks how many notes are in it.
+
+Step 3: Place an order and watch a note appear
+
+. .\tools\api-helpers.ps1
+$ana = Get-AuthHeader 'ana.silva@example.com' 'Sunny-Garden-42'
+$pen = (Invoke-RestMethod "$api/products/gel-pen-set/").id
+$ship = @{ full_name = 'Ana Silva'; address = '12 Garden Road'; city = 'Test City'; postal_code = '54321'; country = 'Testland' }
+
+Send-Json DELETE "$api/cart/" -Headers $ana | Out-Null
+Send-Json POST "$api/cart/items/" @{ product_id = $pen; quantity = 2 } -Headers $ana | Out-Null
+Measure-Command { $script:order = Invoke-RestMethod -Method Post -Uri "$api/orders/checkout/" -Headers $ana -ContentType 'application/json' -Body ($ship | ConvertTo-Json) } | Select-Object TotalSeconds
+$order.id
+docker compose exec redis redis-cli LLEN celery
+- Measure-Command shows the checkout still answers in well under a second.
+- $order.id is probably 10 (my two test orders used up 8 and 9).
+- LLEN is now (integer) 1. One note is waiting.
+
+Look at the note itself:
+docker compose exec redis redis-cli LRANGE celery 0 -1
+It's a long line of text. Look for "task": "orders.tasks.send_order_confirmation" (which job to run) and "argsrepr": "(10,)" (for which order). That's everything the worker needs to know.
+
+Step 4: A failed checkout adds nothing
+
+Send-Json POST "$api/orders/checkout/" $ship -Headers $ana
+docker compose exec redis redis-cli LLEN celery
+→ 400 ... Your cart is empty., and the line still holds 1. No order, so no email.
+
+Step 5: Place one more order
+
+Send-Json POST "$api/cart/items/" @{ product_id = $pen } -Headers $ana | Out-Null
+Send-Json POST "$api/orders/checkout/" $ship -Headers $ana | Out-Null
+docker compose exec redis redis-cli LLEN celery
+→ (integer) 2. There's no worker yet, so nobody is processing the line, and the notes simply wait. They're safe there. In the next lesson, the worker starts and picks up both.
+
+Step 6: Commit
+
+git status
+git add backend
+git commit -m "Celery setup; queue order confirmation email after checkout commits"
+
+---
+
+❓ If something goes wrong
+
+┌───────────────────────────────────────┬─────────────────────────────────────────────────┬───────────────────────────────────────────────────────────┐
+│             What you see              │                       Why                       │                            Fix                            │
+├───────────────────────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ ModuleNotFoundError: No module named  │ uv add not run, or run in the wrong folder      │ Step 1, from backend\                                     │
+│ 'celery'                              │                                                 │                                                           │
+├───────────────────────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ LLEN stays 0 after a successful order │ Redis isn't reachable from Django, or the       │ docker compose ps (redis must be healthy); restart        │
+│                                       │ server is still running old code                │ runserver; look for an error in Window 1                  │
+├───────────────────────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Checkout suddenly takes about 4       │ Redis is stopped                                │ docker compose start redis                                │
+│ seconds                               │                                                 │                                                           │
+├───────────────────────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Error: No such container from docker  │ You're not in the project root, or Docker       │ cd to the project root; start Docker Desktop              │
+│ compose exec                          │ Desktop isn't running                           │                                                           │
+└───────────────────────────────────────┴─────────────────────────────────────────────────┴───────────────────────────────────────────────────────────┘
+
+---
+
+✅ Checkpoint
+
+Paste:
+1. the uv add lines showing celery and redis,
+2. the checkout time from Step 3 and the order number, and
+3. the three LLEN results (Steps 3, 4 and 5).
+
+Next: Lesson 8.2, the worker in Docker. We build a Docker image of our backend (installed with uv, just like on Windows), add a worker next to PostgreSQL and Redis, start it, and watch it pick up the two waiting notes and print the two confirmation emails.
+
+✻ Sautéed for 2m 53s · done 8:04 PM

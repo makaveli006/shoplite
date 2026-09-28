@@ -157,6 +157,16 @@ REST_FRAMEWORK = {
 # The React dev server runs on http://localhost:5173. Comma-separated in .env.
 CORS_ALLOWED_ORIGINS = env_list('CORS_ALLOWED_ORIGINS')
 
+# Celery (background jobs). Redis is the "waiting line" for jobs.
+# On Windows: redis://localhost:6379/0.  Inside Docker the worker uses redis://redis:6379/0.
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_TASK_IGNORE_RESULT = True  # we don't need to store what tasks return
+
+# Email. In development the "console" backend prints emails instead of sending them.
+EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'ShopLite <orders@shoplite.local>')
+
 # JSON Web Tokens (djangorestframework-simplejwt)
 SIMPLE_JWT = {
     # Short-lived token sent with every API request.

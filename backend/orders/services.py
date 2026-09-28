@@ -6,6 +6,7 @@ from cart.models import Cart
 from catalog.models import Product
 
 from .models import Order, OrderItem
+from .tasks import send_order_confirmation
 
 
 class OrderStatusError(Exception):
@@ -75,6 +76,12 @@ def place_order(user, shipping):
     # 6. Empty the cart.
     cart.items.all().delete()
     cart.save(update_fields=['updated_at'])
+
+    # 7. Queue the confirmation email, but only AFTER the order is really saved
+    #    (if the transaction rolls back, nothing is queued). robust=True: if the queue
+    #    (Redis) is unreachable, log the error instead of failing a checkout that
+    #    already succeeded.
+    transaction.on_commit(lambda: send_order_confirmation.delay(order.pk), robust=True)
 
     return order
 
