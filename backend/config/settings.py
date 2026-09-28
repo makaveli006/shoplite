@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -122,11 +123,12 @@ AUTH_USER_MODEL = 'accounts.User'
 REST_FRAMEWORK = {
     # How DRF finds out WHO is making the request.
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        # The browser session (after logging in to /admin/ or /api-auth/login/).
+        # "Authorization: Bearer <access token>" header: used by React and PowerShell.
+        # Listed first, so a request without credentials gets 401 (not 403).
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        # The browser session (after logging in to /admin/ or /api-auth/login/),
+        # so the browsable API keeps working during development.
         'rest_framework.authentication.SessionAuthentication',
-        # Email + password sent with every request. TEMPORARY, for testing from
-        # PowerShell until JWT authentication replaces it in Phase 5.
-        'rest_framework.authentication.BasicAuthentication',
     ],
     # Secure default: every endpoint requires a logged-in user unless the view
     # says otherwise (our catalog views use IsAdminOrReadOnly).
@@ -142,6 +144,18 @@ REST_FRAMEWORK = {
         'rest_framework.filters.SearchFilter',
         'core.filters.StableOrderingFilter',
     ],
+}
+
+# JSON Web Tokens (djangorestframework-simplejwt)
+SIMPLE_JWT = {
+    # Short-lived token sent with every API request.
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.getenv('JWT_ACCESS_MINUTES', '15'))),
+    # Long-lived token used only to get new access tokens.
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=int(os.getenv('JWT_REFRESH_DAYS', '7'))),
+    # The word before the token in the header: "Authorization: Bearer <token>".
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    # Record the login time in User.last_login (visible in the admin).
+    'UPDATE_LAST_LOGIN': True,
 }
 
 

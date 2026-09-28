@@ -3653,3 +3653,338 @@ Step 5 (Lesson 4.7): The API so far, in one table
 └───────────────────────────────────────────────────────────────────────────────────────────────┴─────────────────┴───────────────┴────────────────────┘
 
 That's the full catalog API from the plan.
+
+
+
+
+
+What & why
+
+Until now, PowerShell sent your email and password with every request (Basic authentication), and the browser used a session cookie. Neither is right for our React app:
+- Basic auth means the frontend would have to store the password and send it thousands of times.
+- Session cookies are tied to the browser's same-site rules and need CSRF handling. They're awkward when the frontend (port 5173) and API (port 8000) are different origins.
+
+The standard solution for a single-page app plus an API is token authentication with JWTs:
+1. The user logs in once with email and password, and receives two tokens.
+2. Every later request carries the short-lived access token in a header.
+3. When it expires, the app quietly swaps the long-lived refresh token for a new access token.
+
+Today we add:
+- POST /api/auth/token/: email + password → {"access": ..., "refresh": ...}
+- POST /api/auth/token/refresh/: refresh → new access
+- JWTAuthentication as the main way DRF identifies users, replacing Basic authentication
+
+Files involved (written; verified with the exact versions uv will install)
+backend/
+├── pyproject.toml / uv.lock   ← YOU: uv add djangorestframework-simplejwt  (→ 5.5.1 + PyJWT)
+├── .env / .env.example        ← ✏️ JWT_ACCESS_MINUTES=15, JWT_REFRESH_DAYS=7
+├── config/settings.py         ← ✏️ JWTAuthentication replaces BasicAuthentication; SIMPLE_JWT settings
+├── config/urls.py             ← ✏️ path('api/auth/', include('accounts.urls'))
+└── accounts/urls.py           ← NEW: token/ and token/refresh/
+How the pieces connect:
+1) LOGIN   POST /api/auth/token/  {"email": "...", "password": "..."}
+           config/urls.py 'api/auth/' → accounts/urls.py 'token/' → TokenObtainPairView
+           → checks the password → builds 2 tokens signed with SECRET_KEY
+           ← 200 {"access": "eyJ...", "refresh": "eyJ..."}
+
+2) USE     GET /api/...   header  Authorization: Bearer eyJ...(access)
+           DRF → JWTAuthentication (first in DEFAULT_AUTHENTICATION_CLASSES)
+           → verifies signature + expiry → loads User by the token's user_id → request.user
+           → permission classes (IsAdminOrReadOnly / IsAuthenticated) as before
+
+3) RENEW   POST /api/auth/token/refresh/  {"refresh": "eyJ..."}
+           ← 200 {"access": "eyJ...(new)"}
+
+---
+
+Concept 1: Sessions vs. tokens, and how each identifies you
+
+HTTP is stateless: every request arrives on its own, and the server doesn't automatically remember previous requests. Each authentication method is a way to attach proof of identity to every request.
+
+Session authentication (what the admin uses):
+1. You log in, and Django creates a row in the django_session table with a random key and data like {"_auth_user_id": "1"}.
+2. The key goes back to the browser in a cookie, sessionid=abc123....
+3. The browser sends that cookie with every request. Django looks up the row, finds user 1, and sets request.user.
+4. So the state lives on the server, in the database. Logging out deletes the row, which invalidates the session immediately.
+5. Because browsers send cookies automatically, a malicious site could trigger requests with your cookie. That's why session-based writes need a CSRF token (the "CSRF Failed" error from Lesson 4.3's ta
+3. The server checks the signature with its secret key. If it's valid and not expired, it trusts the user_id inside.
+4. The token is stateless: verification needs no database lookup, only a cryptographic check. (Simple JWT still loads the user row once per request to get is_staff, is_active, and so on.)
+5. Browsers don't attach it automatically, so classic CSRF attacks don't apply.
+
+The trade-off: a JWT can't be "deleted" on the server. It stays valid until it expires. That's why the access token is short-lived (Concept 3).
+
+Concept 2: What's inside a JWT
+
+A JWT is three base64url-encoded parts joined by dots:
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 . eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjox... . Xq3d8mJ0kP...
+└──────────── header ───────────────┘   └──────────────── payload ────────────────┘   └─ signature ─┘
+- Header (decoded): {"alg": "HS256", "typ": "JWT"}. It says the signature was made with HMAC-SHA256.
+- Payload (decoded): the claims. From my verification run for your customer account:
+{"token_type": "access", "exp": 1790576321, "iat": 1790575421, "jti": "891d5c1d...", "user_id": "2"}
+| Claim      | Meaning                                                         |
+|------------|-----------------------------------------------------------------|
+| token_type | access or refresh. Simple JWT refuses to use one as the other.  |
+| iat        | "issued at", as a Unix timestamp (seconds since 1 Jan 1970 UTC) |
+| exp        | "expires at". Here exp − iat = 900 seconds = our 15 minutes.    |
+| jti        | a unique random ID for this token                               |
+| user_id    | the primary key of the user (accounts_user.id)                  |
+
+- Signature: HMAC_SHA256(key=SECRET_KEY, message="<header>.<payload>"), base64url-encoded.
+
+Two critical facts:
+1. base64url is an encoding, not encryption. Anyone holding the token can decode and read the payload. You'll do it yourself in Step 4. Never put secrets in a JWT.
+2. The signature makes it tamper-proof. Change one character of the payload (say user_id: "2" → "1" to become the admin) and the signature no longer matches. Only someone with SECRET_KEY could compute a matching one. I tested exactly this attack, and it was rejected with 401 Token is invalid. This is why SECRET_KEY must stay secret (Lesson 2.3). Whoever has it can mint tokens for any user.
+
+Concept 3: Access tokens vs. refresh tokens
+
+┌─────────────────────────┬───────────────────┬──────────────────────────────────┐
+│                         │   Access token    │          Refresh token           │
+├─────────────────────────┼───────────────────┼──────────────────────────────────┤
+│ Lifetime (our settings) │ 15 minutes        │ 7 days                           │
+├─────────────────────────┼───────────────────┼──────────────────────────────────┤
+│ Sent with               │ every API request │ only to /api/auth/token/refresh/ │
+├─────────────────────────┼───────────────────┼──────────────────────────────────┤
+│ Used for                │ proving identity  │ getting a new access token       │
+└─────────────────────────┴───────────────────┴──────────────────────────────────┘
+
+Why two? Tokens can't be revoked on the server (Concept 1), so the one that travels constantly (and is most likely to leak, e.g. through logs or browser extensions) should expire quickly. A stolen access token is useless within 15 minutes. The refresh token is sent rarely, so it can live longer and keep you logged in for a week without re-entering your password.
+
+In Phase 12 React will do this automatically: when a request fails with 401 because the access token expired, it calls the refresh endpoint, gets a new access token, and retries the request. The user never notices.
+
+Concept 4: 401 vs. 403 (now they're different)
+
+- 401 Unauthorized actually means "not authenticated": we don't know who you are, or your credentials are invalid or expired. A 401 response must include a WWW-Authenticate header telling the client how to authenticate. Here that's WWW-Authenticate: Bearer realm="api".
+- 403 Forbidden means "we know who you are, and you're not allowed."
+
+In Lesson 4.3, anonymous requests got 403. DRF only returns 401 if the first authentication class can produce a WWW-Authenticate header, and SessionAuthentication can't. Now JWTAuthentication is first, and it can (Bearer realm="api"). So:
+- no or invalid token → 401, meaning "log in / refresh your token"
+- a customer trying an admin action → 403, meaning "you can't do that"
+
+The frontend depends on this difference: 401 → try refreshing the token, 403 → show "not allowed".
+
+---
+
+The code, explained line by line
+
+config/settings.py: new import
+- Python style (PEP 8) sorts standard-library imports alphabetically: os, then datetime (a from import), then pathlib.
+- A timedelta is a Python object representing a duration, not a point in time. timedelta(minutes=15) is "15 minutes." Simple JWT adds it to "now" to compute exp.
+
+config/settings.py: authentication classes
+
+'DEFAULT_AUTHENTICATION_CLASSES': [
+    'rest_framework_simplejwt.authentication.JWTAuthentication',
+    'rest_framework.authentication.SessionAuthentication',
+],
+- This is a Python list (square brackets) of strings. Each string is a dotted import path: package rest_framework_simplejwt → module authentication → class JWTAuthentication. DRF imports these classes itself at startup. We give paths as strings so settings.py doesn't have to import all those libraries directly.
+- Order matters. For each request, DRF tries each class in turn:
+  - Each class's authenticate(request) method returns either a (user, token) tuple (success, stop here) or None (not my kind of credentials, try the next class).
+  - If one finds credentials that are invalid (e.g. an expired token), it raises an exception, and the request fails with 401 immediately.
+  - If all return None, the user is anonymous.
+- BasicAuthentication is removed. From now on, curl.exe -default '15' if it isn't set. Environment variables are always strings (Lesson 2.3).
+  b. int('15'): convert the string to the integer 15. If .env contained JWT_ACCESS_MINUTES=abc, int() would raise ValueError: invalid literal for int() and Django wouldn't start. That's fail-fast behaviour we get for free.
+  c. timedelta(minutes=15): build the duration object. minutes= is a keyword argument (naming the parameter makes the call readable, and timedelta(days=7) works the same way).
+- ('Bearer',) is a tuple with one element. The trailing comma is essential: ('Bearer') without it is just the string 'Bearer' in parentheses, because parentheses alone only group. A tuple is like a list but immutable (can't be changed after creation). This setting means only headers that start with Bearer  are treated as JWTs.
+- 'UPDATE_LAST_LOGIN': True makes Simple JWT update User.last_login each time someone obtains tokens, so you can see it in the admin. True and False are Python's booleans (capitalised).
+
+accounts/urls.py
+
+from django.urls import path
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+
+urlpatterns = [
+    path('token/', TokenObtainPairView.as_view(), name='token-obtain'),
+    path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
+]
+- from X import A, B imports two names in one line.
+- urlpatterns is the variable name Django looks for in every URLconf module. The name is a convention Django relies on, so it must be spelled exactly like this.
+- path(route, view, name=...) is a function call that returns a URL pattern object:
+  - route is matched against the URL after the prefix already consumed by include().
+  - view must be a callable that takes a request and returns a response.
+  - name is a label for reverse URL lookups (e.g. in tests: reverse('token-obtain') → /api/auth/token/).
+- .as_view(): TokenObtainPairView is a class, but Django needs a function it can call once per request. as_view() is a class method (called on the class itself, not on an instance) that builds and returns such a function. Each time a request arrives, that function creates a fresh instance of the class and calls its dispatch() method, which calls post() for a POST, and so on. A fresh instance per request means no data can leak between users.
+
+What these two library views do internally (you didn't have to write any of this):
+- TokenObtainPairView uses TokenObtainPairSerializer:
+  - Its fields are named after User.USERNAME_FIELD, which is 'email' in our model (Lesson 2.5). So the login body is {"email": ..., "password": ...}, and sending username gives a 400: {"email": ["This field is required."]}.
+  - It calls Django's authenticate(), which hashes the given password with the stored salt and compares (Lesson 2.6), and it also checks is_active.
+  - On failure → 401 "No active account found with the given credentials". The message deliberately doesn't say whether the email or the password was wrong, so attackers can't discover which emails exist.
+  - On success → RefreshToken.for_user(user) creates the refresh token, derives the access token from it, and returns both as JSON.
+- TokenRefreshView validates the refresh token (signature, expiry, token_type == "refresh") and returns a new access token.
+- Both views set permission_classes = (AllowAny,) inside the library, so they override our global deny-by-default IsAuthenticated. That has to be so, because you can't require login in order to log in.
+
+config/urls.py
+
+path('api/auth/', include('accounts.urls')),
+path('api/', include('catalog.urls')),
+- include('accounts.urls') takes a string module path. Django imports accounts/urls.py and attaches its urlpatterns under the api/auth/ prefix. So 'token/' there becomes /api/auth/token/.
+- Django tries patterns top to bottom and uses the first match. Here the order is only for readability. The catalog router has no auth/ pattern, so nothing would clash either way.
+
+Version check (done before writing this lesson)
+
+With your django==5.1.7 pin, uv's resolver picks djangorestframework-simplejwt 5.5.1 plus its dependency PyJWT 2.15.0 (the library that does the actual encoding and signing). I verified the code with exactly those versions:
+
+┌─────────────────────────────────────┬─────────────────────────────────────────────┐
+│                Check                │                   Result                    │
+├─────────────────────────────────────┼─────────────────────────────────────────────┤
+│ Anonymous GET /api/                 │ 401, WWW-Authenticate: Bearer realm="api"   │
+├─────────────────────────────────────┼─────────────────────────────────────────────┤
+│ Wrong password                      │ 401 "No active account found..."            │
+├─────────────────────────────────────┼─────────────────────────────────────────────┤
+│ Body with username instead of email │ 400 {"email": ["This field is required."]}  │
+├─────────────────────────────────────┼─────────────────────────────────────────────┤
+│ Valid access token                  │ 200                                         │
+├─────────────────────────────────────┼─────────────────────────────────────────────┤
+│ Refresh token used as access        │ 401 "Token has wrong type"                  │
+├─────────────────────────────────────┼─────────────────────────────────────────────┤
+│ Payload changed to user_id: "1"     │ 401 "Token is invalid" (signature mismatch) │
+├─────────────────────────────────────┼─────────────────────────────────────────────┤
+│ Refresh endpoint                    │ 200 {"access": ...}                         │
+└─────────────────────────────────────┴─────────────────────
+
+Window 1:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv add djangorestframework-simplejwt
+uv tree --depth 2 | Select-String -Pattern "simplejwt|pyjwt"
+uv run python manage.py check
+- Expect + djangorestframework-simplejwt==5.5.1 and + pyjwt==2.15.0. PyJWT is a transitive dependency: you didn't ask for it, but Simple JWT needs it.
+- Before uv add, check would fail with ModuleNotFoundError: No module named 'rest_framework_simplejwt'. Django imports the classes named in DEFAULT_AUTHENTICATION_CLASSES at startup.
+
+uv run python manage.py runserver
+
+Step 1: Set up Window 2
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+$api = "http://127.0.0.1:8000/api"
+
+Step 2: Basic auth is gone, and "not logged in" is now 401
+
+curl.exe -i -u "customer@example.com:YOUR_CUSTOMER_PASSWORD" "$api/"
+→ HTTP/1.1 401 Unauthorized, the header WWW-Authenticate: Bearer realm="api", and {"detail":"Authentication credentials were not provided."}.
+
+Trace what happened:
+1. curl sent Authorization: Basic Y3VzdG9t....
+2. JWTAuthentication saw the header type Basic, which isn't in AUTH_HEADER_TYPES, so it returned None ("not mine").
+3. SessionAuthentication found no session cookie and returned
+$body = @{ email = 'customer@example.com'; password = 'YOUR_CUSTOMER_PASSWORD' } | ConvertTo-Json
+$tokens = Invoke-RestMethod -Method Post -Uri "$api/auth/token/" -ContentType 'application/json' -Body $body
+$tokens.access
+$tokens.refresh
+- @{ ... } is a PowerShell hashtable (like a Python dict), and ConvertTo-Json turns it into a JSON string.
+- Invoke-RestMethod is a cmdlet (built into PowerShell, not an external program). Arguments reach it intact, so no JSON-quoting problems here, unlike curl.exe in Windows PowerShell 5.1.
+- $tokens holds the parsed response object with .access and .refresh. Both are long strings starting with eyJ. That's what {" looks like in base64: every JWT header starts with {"alg"..., so every JWT starts with eyJ.
+
+Wrong password, for comparison (curl shows the status code):
+@{ email = 'customer@example.com'; password = 'wrong' } | ConvertTo-Json | Set-Content -Encoding ascii "$env:TEMP\badlogin.json"
+curl.exe -sS -w "  <- %{http_code}`n" -H "Content-Type: application/json" --data-binary "@$env:TEMP\badlogin.json" "$api/auth/token/"
+→ {"detail":"No active account found with the given credentials"}  <- 401
+
+Step 4: Decode your access token yourself
+
+Define a small helper function in PowerShell (paste the whole block):
+function Decode-JwtPart([string]$part) {
+    $s = $part.Replace('-', '+').Replace('_', '/')
+    switch ($s.Length % 4) { 2 { $s += '==' } 3 { $s += '=' } }
+    [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s))
+}
+What each line does:
+- function Decode-JwtPart([string]$part) declares a function with one string parameter.
+- base64url is base64 with two changes, so it's safe in URLs: + becomes -, / becomes _, and the = padding at the end is removed. Line 2 undoes the character swap.
+- Standard base64 length must be a multiple of 4, so line 3 adds back the removed = padding. % is the remainder operator.
+- Line 4 decodes base64 into bytes (FromBase64String), then bytes into text (UTF8.GetString).
+
+Now split the token at the dots and decode the first two parts:
+$parts = $tokens.access.Split('.')
+Decode-JwtPart $parts[0]
+$payload = Decode-JwtPart $parts[1] | ConvertFrom-Json
+$payload
+[DateTimeOffset]::FromUnixTimeSeconds($payload.iat).LocalDateTime
+[DateTimeOffset]::FromUnixTimeSeconds($payload.exp).LocalDateTime
+- Header → {"alg":"HS256","typ":"JWT"}.
+- Payload → token_type: access, exp, iat, jti, and user_id: 2 (the customer's id from Lesson 2.6).
+- The two timestamps, converted to your local time, are exactly 15 minutes apart.
+
+You just read the token's contents without any password or key. Anyone can. The third part ($parts[2]) is the signature, which is only bytes and can't be "decoded" into anything meaningful.
+
+Step 5: Use the access token
+
+$auth = @{ Authorization = "Bearer $($tokens.access)" }
+Invoke-RestMethod "$api/" -Headers $auth
+- $( ... ) inside a double-quoted string is a subexpression: PowerShell evaluates the code inside and inserts the result. Without it, "Bearer $tokens.access" would insert $tokens (the whole object) followed by the literal text .access.
+- → the API root now answers (categories, products) instead of 401.
+
+The customer is authenticated but not staff, so writing is still forbidden:
+curl.exe -sS -w "  <- %{http_code}`n" -X DELETE -H "Authorization: Bearer $($tokens.access)" "$api/products/chef-knife/"
+→ {"detail":"You do not have permission to perform this action."}  <- 403. That's the 401/403 difference in practice.
+
+Step 6: Try the two attacks
+
+(a) Use the refresh token as an access token:
+curl.exe -sS -w "  <- %{http_code}`n" -H "Authorization: Bearer $($tokens.refresh)" "$api/"
+→ ... "message":"Token has wrong type" ...  <- 401. The token_type claim says refresh, and only access is accepted here.
+
+(b) Tamper with the payload to impersonate the admin (user id 1):
+function ConvertTo-Base64Url([string]$text) {
+    [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($text)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+$payload.user_id = '1'
+$forged = $parts[0] + '.' + (ConvertTo-Base64Url ($payload | ConvertTo-Json -Compress)) + '.' + $parts[2]
+curl.exe -sS -w "  <- %{http_code}`n" -H "Authorization: Bearer $forged" "$api/"
+- ConvertTo-Base64Url is the reverse of Decode-JwtPart.
+- We change user_id to the admin's id, re-encode the payload, and keep the original signature.
+
+→ {"detail":"Given token not valid for any token type", ..., "message":"Token is invalid"}  <- 401
+
+Why it failed: the server recomputed HMAC_SHA256(SECRET_KEY, header + "." + new_payload), and it doesn't match the old signature. To forge a valid one, you'd need SECRET_KEY.
+
+Step 7: Refresh the access token
+
+$refreshBody = @{ refresh = $tokens.refresh } | ConvertTo-Json
+$new = Invoke-RestMethod -Method Post -Uri "$api/auth/token/refresh/" -ContentType 'application/json' -Body $refreshBody
+$new.access -eq $tokens.access
+(Decode-JwtPart $new.access.Split('.')[1] | ConvertFrom-Json).jti
+$payload.jti
+- $new contains only access (no new refresh token, because refresh-token rotation isn't enabled).
+- -eq compares: False, it's a different token.
+- The two jti values differ: each token has its own unique ID. The new access token has a fresh 15-minute window.
+
+Step 8: Log in as admin and write with a token
+
+$adminBody = @{ email = 'subin@ontash.net'; password = 'YOUR_ADMIN_PASSWORD' } | ConvertTo-Json
+$adminTokens = Invoke-RestMethod -Method Post -Uri "$api/auth/token/" -ContentType 'application/json' -Body $adminBody
+$adminAuth = @{ Authorization = "Bearer $($adminTokens.access)" }
+
+$patch = @{ stock = 41 } | ConvertTo-Json
+(Invoke-RestMethod -Method Patch -Uri "$api/products/wireless-mouse/" -Headers $adminAuth -ContentType 'application/json' -Body $patch).stock
+→ 41. The same IsAdminOrReadOnly permission from Lesson 4.3 now receives its request.user from the JWT.
+
+In the admin site (log in in the browser), Users → open customer@example.com: Last login now shows the time of Step 3. That's UPDATE_LAST_LOGIN: True.
+
+Step 9 (optional): Re-run the two Lesson 4.6 tests that returned 000
+
+uv run python -c "import os; from PIL import Image; Image.frombytes('RGB', (1200, 1200), os.urandom(1200*1200*3)).save(r'$env:TEMP\big.png')"
+Set-Content "$env:TEMP\fake.jpg" "this is not an image"
+curl.exe -sS -w "  <- %{http_code}`n" -X PATCH -H "Authorization: Bearer $($adminTokens.access)" -F "image=@$env:TEMP\big.png" "$api/products/wireless-mouse/"
+curl.exe -sS -w "  <- %{http_code}`n" -X PATCH -H "Authorization: Bearer $($adminTokens.access)" -F "image=@$env:TEMP\fake.jpg" "$api/products/wireless-mouse/"
+→ ...maximum is 2 MB...  <- 400 and ...Upload a valid image...  <- 400.
+
+Step 10 (optional): Watch an access token expire
+
+In Window 1, stop the server and restart it with a 1-minute lifetime. A real environment variable beats .env (Lesson 2.3):
+$env:JWT_ACCESS_MINUTES = "1"
+uv run python manage.py runserver
+In Window 2, log in again (Step 3), wait more than 60 seconds, then:
+curl.exe -sS -w "  <- %{http_code}`n" -H "Authorization: Bearer $($tokens.access)" "$api/"
+→ ..."message":"Token is expired"...  <- 401. That's exactly the signal React will use to refresh automatically. Afterwards, in Window 1: Ctrl+C, Remove-Item Env:JWT_ACCESS_MINUTES, and restart normally.
+"$api/products/wireless-mouse/"
+curl.exe -sS -w "  <- %{http_code}`n" -X PATCH -H "Authorization: Bearer $($adminTokens.access)" -F "image=@$env:TEMP\fake.jpg" "$api/products/wireless-mouse/"
+→ ...maximum is 2 MB...  <- 400 and ...Upload a valid image...  <- 400.
+
+Step 10 (optional): Watch an access token expire
+
+In Window 1, stop the server and restart it with a 1-minute lifetime. A real environment variable beats .env (Lesson 2.3):
+$env:JWT_ACCESS_MINUTES = "1"
+uv run python manage.py runserver
+In Window 2, log in again (Step 3), wait more than 60 seconds, then:
+curl.exe -sS -w "  <- %{http_code}`n" -H "Authorization: Bearer $($tokens.access)" "$api/"
+→ ..."message":"Token is expired"...  <- 401. That's exactly the signal React will use to refresh automatically. Afterwards, in Window 1: Ctrl+C, Remove-Item Env:JWT_ACCESS_MINUTES, and restart normally.
