@@ -11,6 +11,7 @@ function useInvalidateProducts() {
     queryClient.invalidateQueries({ queryKey: ['products'] })
     queryClient.invalidateQueries({ queryKey: ['product'] })
     queryClient.invalidateQueries({ queryKey: CART_KEY }) // carts show product details too
+    queryClient.invalidateQueries({ queryKey: ['categories'] }) // their product counts change
   }
 }
 

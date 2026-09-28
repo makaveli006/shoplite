@@ -7037,3 +7037,105 @@ npm run build
 cd ..
 git add frontend
 git commit -m "Admin area: store management tabs, product table with search, create/edit form with image upload, hide/show and delete"
+
+
+
+
+
+Phase 14, Lesson 14.2: Managing categories
+
+Lesson 14.1 committed as 9cceb34. 👍
+
+What & why
+
+Staff can manage products, but not the categories they belong to. A shop needs to add new categories ("Toys"), fix names and descriptions, and remove ones it no longer uses. There's one rule from the start of the course to respect: a category that still has products can't be deleted (Lesson 3.1, PROTECT). The screen should make that obvious rather than surprising.
+
+What happens now
+
+The Categories tab (Admin → Categories) shows a table with each category's name (a link to the shop's product list filtered to it), web name, description, and number of products, plus ✏️ edit and 🗑 delete buttons.
+
+The product count is new. I added it to the backend, so the API's category list now says how many products use each category (hidden ones included). It's counted inside the same database query as the categories themselves, the same technique as the Django admin's count column in Lesson 3.4. That also brought back the "sort order is lost when counting" trap from Lesson 3.5, so the order by name is set explicitly again. I added a backend test for the count, making 40 tests, and all pass.
+
+Creating or editing uses a small form: name, web name (can be left empty on create, so the server makes one from the name), and description.
+- The server's rules appear under the fields, for example "category with this name already exists." (names are unique, Lesson 3.1).
+- When editing, a note warns that changing the web name also changes category links. Anyone who bookmarked /products?category=kitchen would land on an unfiltered search afterwards. This is a real-world consideration, and it's why many shops rarely change web names.
+- After saving, the category list, the shop's filter dropdown, and product pages (which show category names) all refresh.
+
+Deleting:
+- The warning dialog already tells you the outcome in advance: for a category with products, "This category still has 3 product(s). The shop will refuse to delete it until they are moved to another category or deleted." For an empty one: "This category has no products and will be removed."
+- If you confirm on a category with products anyway, the API refuses with 409 Conflict (Lesson 4.3), and its message appears: "This category still has products. Move or delete them first." Nothing is deleted.
+- Moving products to another category is done in the product form's category dropdown (Lesson 14.1). Once a category is empty, it can be deleted.
+
+Product changes now also refresh the category counts. Create a product in "Toys", and the Toys row shows 1.
+
+What I built
+
+- Backend: the product count on categories, plus a test for it
+- Frontend: the Categories tab (table, create/edit dialog, delete with the outcome explained up front), and the connections for saving and deleting categories, with "refresh what's affected" afterwards
+
+Tested: all 40 backend tests pass. Through the backend, I confirmed (and then undid): creating "Toys" gives 201 with a count of 0, editing works, the list shows the counts, and deleting Kitchen gives 409 with the message. The frontend's TypeScript check, build, and lint pass.
+
+---
+
+▶️ Your turn
+
+Restart Django in Window 1 so it uses the new code (Ctrl+C, then uv run python manage.py runserver). Then start npm run dev, sign in as admin, and open Admin → Categories.
+
+Step 1: The table
+
+Five categories, with counts (for example, Kitchen 7, which includes the hidden Discontinued mug). Click Books to open the shop filtered to Books.
+
+Step 2: Create a category, then give it a product
+
+1. New category → name Toys, description Games and toys for all ages, web name left empty → Create category. The row shows toys and 0.
+2. New category again with the name Toys → "category with this name already exists." → Cancel.
+3. Go to Products → New product: Wooden Puzzle, category Toys, price 14.00, stock 10 → create. Back on Categories, Toys now shows 1.
+4. In the shop's Products page, the category dropdown now includes Toys.
+
+Step 3: Deleting, refused and allowed
+
+1. Click 🗑 on Toys. The dialog already says it has 1 product. Click Delete category anyway. You get the red message "This category still has products. Move or delete them first.", and Toys is still there.
+2. Go to Products, and delete the Wooden Puzzle (or edit it and move it to Home & Garden).
+3. Back on Categories, Toys shows 0. Delete it: "Toys" was deleted.
+
+Step 4: The API test
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py test catalog
+→ Ran 13 tests ... OK, including test_categories_show_their_product_count.
+
+Step 5: Build and commit
+
+cd ..\frontend
+npm run build
+cd ..
+git add backend frontend
+git commit -m "Admin categories: product counts from the API, create/edit/delete with conflict message"
+
+---
+
+❓ If something goes wrong
+
+┌────────────────────────────────────────┬─────────────────────────────────────────────────────────────┬─────────────────────────────────────────────┐
+│              What you see              │                             Why                             │                     Fix                     │
+├────────────────────────────────────────┼─────────────────────────────────────────────────────────────┼─────────────────────────────────────────────┤
+│ The Products column is empty           │ Django is still running the old code                        │ Restart runserver                           │
+├────────────────────────────────────────┼─────────────────────────────────────────────────────────────┼─────────────────────────────────────────────┤
+│ Toys doesn't appear in the shop's      │ The categories list was remembered from earlier (reused for │ Reload the page; our admin actions refresh  │
+│ category dropdown                      │  5 minutes, Lesson 11.2)                                    │ it automatically                            │
+├────────────────────────────────────────┼─────────────────────────────────────────────────────────────┼─────────────────────────────────────────────┤
+│ Deleting an empty category still gives │ A hidden product still uses it (the count includes hidden   │ Look for it in Admin → Products             │
+│  the 409 message                       │ ones)                                                       │                                             │
+└────────────────────────────────────────┴─────────────────────────────────────────────────────────────┴─────────────────────────────────────────────┘
+
+---
+
+✅ Checkpoint
+
+Tell me:
+1. the count Toys showed after Step 2.3, and
+2. the message from Step 3.1.
+
+Next: Lesson 14.3, all orders. Staff see every customer's orders in a table: filter by status ("everything waiting to be shipped"), open an order, and move it along with buttons (Mark as paid, Mark as shipped, Mark as delivered, Cancel). Only the buttons allowed by the status diagram appear. We'll finish by checking that a normal customer is refused (403) by the API itself for every admin action, the checkpoint from our plan.
+
+✻ Brewed for 1m 54s · done 3:17 AM

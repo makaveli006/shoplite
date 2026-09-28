@@ -33,6 +33,7 @@ export interface CategorySummary {
 
 export interface Category extends CategorySummary {
   description: string
+  product_count: number // products using this category, hidden ones included
 }
 
 /** The product details shown on a cart line. */

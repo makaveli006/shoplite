@@ -1,4 +1,4 @@
-from django.db.models import ProtectedError
+from django.db.models import Count, ProtectedError
 from rest_framework import status, viewsets
 from rest_framework.response import Response
 
@@ -19,7 +19,9 @@ class CategoryViewSet(viewsets.ModelViewSet):
     DELETE /api/categories/<slug>/   delete          (admin)
     """
 
-    queryset = Category.objects.all()
+    # Count each category's products (hidden ones included) in the same query.
+    # Explicit order_by: Meta.ordering is ignored in GROUP BY queries (Lesson 3.5).
+    queryset = Category.objects.annotate(product_count=Count('products')).order_by('name')
     serializer_class = CategorySerializer
     permission_classes = [IsAdminOrReadOnly]
     lookup_field = 'slug'

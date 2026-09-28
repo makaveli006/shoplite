@@ -90,6 +90,12 @@ class ProductWriteTests(APITestCase):
         self.assertEqual(response.status_code, 409)
         self.assertTrue(Category.objects.filter(slug='kitchen').exists())
 
+    def test_categories_show_their_product_count(self):
+        make_category('Empty')
+        response = client_for().get('/api/categories/')
+        counts = {category['name']: category['product_count'] for category in response.data}
+        self.assertEqual(counts, {'Empty': 0, 'Kitchen': 1})
+
     def test_empty_category_can_be_deleted(self):
         make_category('Empty')
         self.assertEqual(client_for(self.admin).delete('/api/categories/empty/').status_code, 204)

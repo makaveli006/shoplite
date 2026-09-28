@@ -1,5 +1,25 @@
 import { api } from '@/lib/api'
-import type { Product } from '@/types/api'
+import type { Category, Product } from '@/types/api'
+
+export interface CategoryFormValues {
+  name: string
+  slug: string // may be left empty: the server makes one from the name
+  description: string
+}
+
+/** Create (existingSlug = null) or update a category. */
+export async function saveCategory(existingSlug: string | null, values: CategoryFormValues): Promise<Category> {
+  const body: Partial<CategoryFormValues> = { name: values.name, description: values.description }
+  if (values.slug.trim()) body.slug = values.slug.trim()
+  const { data } = existingSlug
+    ? await api.patch<Category>(`/categories/${existingSlug}/`, body)
+    : await api.post<Category>('/categories/', body)
+  return data
+}
+
+export async function deleteCategory(slug: string): Promise<void> {
+  await api.delete(`/categories/${slug}/`)
+}
 
 /** What the admin product form edits. Numbers are kept as text while typing. */
 export interface ProductFormValues {

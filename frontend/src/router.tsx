@@ -4,6 +4,7 @@ import { AdminLayout } from '@/components/admin/AdminLayout'
 import { RequireAdmin, RequireAuth } from '@/components/auth/RouteGuards'
 import { RootLayout } from '@/components/layout/RootLayout'
 import { AccountPage } from '@/pages/AccountPage'
+import { AdminCategoriesPage } from '@/pages/admin/AdminCategoriesPage'
 import { AdminComingSoon } from '@/pages/admin/AdminComingSoon'
 import { AdminProductsPage } from '@/pages/admin/AdminProductsPage'
 import { CartPage } from '@/pages/CartPage'
@@ -53,7 +54,7 @@ export const router = createBrowserRouter([
             children: [
               { index: true, element: <Navigate to="products" replace /> }, // /admin opens the products tab
               { path: 'products', Component: AdminProductsPage },
-              { path: 'categories', element: <AdminComingSoon title="Categories" lesson="Lesson 14.2" /> },
+              { path: 'categories', Component: AdminCategoriesPage },
               { path: 'orders', element: <AdminComingSoon title="All orders" lesson="Lesson 14.3" /> },
             ],
           },

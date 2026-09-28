@@ -9,9 +9,16 @@ MAX_IMAGE_SIZE = 2 * 1024 * 1024  # 2 MB
 class CategorySerializer(serializers.ModelSerializer):
     """Full category, used by the /api/categories/ endpoints."""
 
+    # How many products use this category (a category with products can't be deleted).
+    product_count = serializers.SerializerMethodField()
+
     class Meta:
         model = Category
-        fields = ['id', 'name', 'slug', 'description']
+        fields = ['id', 'name', 'slug', 'description', 'product_count']
+
+    def get_product_count(self, category):
+        # Filled in by the view's query; a category that was just created has none yet.
+        return getattr(category, 'product_count', 0)
 
 
 class CategorySummarySerializer(serializers.ModelSerializer):
