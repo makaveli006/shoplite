@@ -8,6 +8,10 @@ from catalog.models import Product
 from .models import Order, OrderItem
 
 
+class OrderStatusError(Exception):
+    """A status change was refused (not allowed from the current status)."""
+
+
 class CheckoutError(Exception):
     """Checkout was refused. `problems` is a list of messages to show the customer."""
 
@@ -72,4 +76,43 @@ def place_order(user, shipping):
     cart.items.all().delete()
     cart.save(update_fields=['updated_at'])
 
+    return order
+
+
+@transaction.atomic
+def change_status(order_id, new_status, customer=None):
+    """Move an order to a new status, following Order.ALLOWED_TRANSITIONS.
+
+    Cancelling puts the ordered quantities back into stock.
+    With `customer` given, this is a customer cancelling their own order: only
+    their own orders, and only while the order is still pending.
+    """
+    # Lock the order row: two clicks on "Cancel" (or an admin and a customer at the
+    # same time) are handled one after the other, so stock is never returned twice.
+    order = Order.objects.select_for_update().get(pk=order_id)
+    labels = dict(Order.Status.choices)
+
+    if customer is not None:
+        if order.user_id != customer.pk:
+            raise OrderStatusError('This is not your order.')
+        if order.status != Order.Status.PENDING:
+            raise OrderStatusError(
+                f'This order is already {labels[order.status].lower()} and can no longer be cancelled. '
+                'Please contact us.'
+            )
+
+    if order.status == new_status:
+        raise OrderStatusError(f'The order is already {labels[new_status].lower()}.')
+    if not order.can_change_status_to(new_status):
+        raise OrderStatusError(
+            f'An order that is {labels[order.status].lower()} cannot be changed to {labels[new_status].lower()}.'
+        )
+
+    if new_status == Order.Status.CANCELLED:
+        now = timezone.now()
+        for item in order.items.exclude(product=None):
+            Product.objects.filter(pk=item.product_id).update(stock=F('stock') + item.quantity, updated_at=now)
+
+    order.status = new_status
+    order.save(update_fields=['status', 'updated_at'])
     return order

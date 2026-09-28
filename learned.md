@@ -5239,6 +5239,118 @@ Paste:
 
 Next: Lesson 7.4, managing orders. Customers can see their order history and cancel pending orders (stock goes back automatically), and admins get "Mark as paid / shipped / delivered / cancelled" actions that only allow the moves from the status diagram.
 
-✻ Crunched for 2m 35s · done 6:24 PM
 
-※ recap: We're building your Django + React shop step by step, and Lesson 7.3 (che
+Phase 7, Lesson 7.4: Managing orders (history, cancelling, and status changes)
+
+Lesson 7.3 checkpoint passed. The knife problem was refused, order #5 was created for 137.48 with stock 5→3 and 20→17, and the race was won once by Ana and once by Bob, with stock never below 0. That's exactly the point: the winner is random, but there's always exactly one. Commit f92df12 is in.
+
+What & why
+
+Orders now exist, but nobody can do anything with them. Customers can't see their past orders or change their mind, and the shop can't record that an order was paid, sent, or arrived. This lesson adds the day-to-day order handling:
+- Customers can see a list of their own orders, open any one of them, and cancel an order while it's still waiting for payment. The cancelled items go straight back on the shelf.
+- Admins can see every order, filter them by status (for example "everything waiting to be shipped"), and move orders along: paid → shipped → delivered, or cancelled if needed. They can do this from the API (for the React admin screens later) and with buttons in the Django admin.
+- Every status change follows the status diagram from Lesson 7.1. Anything else is refused with a message explaining why.
+
+What happens now
+
+Seeing orders. A customer's order list shows only their own orders, newest first, split into pages like the product list. They can open any of their orders to see the lines, prices, and address, but another customer's order number gives "not found", just like the cart. Admins see everyone's orders, including the customer's email, and can narrow the list to one status or sort by amount.
+
+A customer cancels an order. This is only possible while the order is pending (not yet paid). When it happens:
+1. The order is marked cancelled.
+2. Every item on it goes back into stock. If Bob cancels 2 knives, the knife stock goes up by 2.
+
+Once the order is paid or later, the customer is told "This order is already paid and can no longer be cancelled. Please contact us." From then on, only the shop can cancel it, for example to give a refund.
+
+The double-click problem again. What if Bob clicks "Cancel" twice very quickly, or Bob and an admin cancel the same order at the same moment? Without protection, both could see "pending", and both could return the stock, so 2 knives would come back twice. That's the same kind of race as the last cutting board in Lesson 7.3, and it's solved the same way: while one cancellation is being handled, the order is held, and the second request has to wait. When it gets its turn, the order is already cancelled, so it's refused. Stock is only ever returned once.
+
+An admin moves an order along. The admin chooses the next status, and the shop checks it against the diagram:
+- pending → paid ✅, paid → shipped ✅, shipped → delivered ✅
+- pending → delivered ❌ (can't skip steps)
+- delivered → cancelled ❌ (delivered and cancelled are final)
+- paid → cancelled ✅ (the shop can still cancel before shipping, and the stock goes back)
+
+Customers can't change statuses at all: they're refused as "not allowed", and the only thing they can do is cancel their own pending order.
+
+In the Django admin, the order list now has four actions: Mark as paid, Mark as shipped, Mark as delivered, and Cancel. You can select several orders at once. Each order is checked separately: the ones that are allowed to move are moved, and for each one that isn't, a yellow warning explains why, for example "Order #6: An order that is pending cannot be changed to delivered." Every successful change is also written into that order's History. In Lesson 3.5 you saw that bulk actions didn't leave any history. Here I chose the slower, one-by-one way on purpose, because for orders, knowing who changed what and when really matters.
+
+What I added: the order list, order detail, cancel, and status-change endpoints; the admin actions; and one shared piece of logic for "change an order's status" that the API and the admin both use. So there's exactly one set of rules, the one from Lesson 7.1.
+
+What my tests showed (undone afterwards):
+
+┌───────────────────────────────┬─────────────────────────────────────────────────────────────────────────┐
+│             Test              │                                 Result                                  │
+├───────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ Bob's order list              │ his 2 orders (#7, #5); Ana opening Bob's #5 → not found; no login → 401 │
+├───────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ Bob cancels #5                │ cancelled; knife stock 3 → 5                                            │
+├───────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ Bob cancels #5 again          │ refused: already cancelled                                              │
+├───────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ Bob tries to set a status     │ 403, not allowed                                                        │
+├───────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ Admin: #7 pending → delivered │ refused: pending cannot be changed to delivered                         │
+├───────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ Admin: #7 → paid → shipped    │ ✅; then Bob tries to cancel → already shipped ... Please contact us.   │
+├───────────────────────────────┼─────────────────────────────────────────────────────────────────────────┤
+│ Admin: delivered → cancelled  │ refused: delivered cannot be changed to cancelled                       │
+└───────────────────────────────┴─────────────────────────────────────────────────────────────────────────┘
+
+---
+
+▶️ Your turn
+
+Right now you have three pending orders: #5 (Bob: 2 knives + 3 mugs), #6 (Ana: 1 board), and #7 (Bob: 1 board).
+
+Window 1:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py check
+uv run python manage.py runserver
+
+Window 2:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+. .\tools\api-helpers.ps1
+$bob   = Get-AuthHeader 'bob@example.com' 'Sunny-Garden-42'
+$ana   = Get-AuthHeader 'ana.silva@example.com' 'Sunny-Garden-42'
+$admin = Get-AuthHeader 'subin@ontash.net' 'YOUR_ADMIN_PASSWORD'
+
+Step 1: Order history, and privacy
+
+(Invoke-RestMethod "$api/orders/" -Headers $bob).results | Select-Object id, status_display, total_amount, created_at
+(Invoke-RestMethod "$api/orders/" -Headers $ana).results | Select-Object id, status_display, total_amount
+Send-Json GET "$api/orders/5/" -Headers $ana
+(Invoke-RestMethod "$api/orders/?status=pending" -Headers $admin).count
+1. Bob sees #7 and #5, newest first.
+2. Ana sees only #6.
+3. Ana opening Bob's order → 404.
+4. The admin sees 3 pending orders from all customers.
+
+Step 2: Bob cancels an order, and the stock comes back
+
+(Invoke-RestMethod "$api/products/chef-knife/").stock
+(Invoke-RestMethod "$api/products/blue-ceramic-mug/").stock
+Send-Json POST "$api/orders/5/cancel/" -Headers $bob
+(Invoke-RestMethod "$api/products/chef-knife/").stock
+(Invoke-RestMethod "$api/products/blue-ceramic-mug/").stock
+Send-Json POST "$api/orders/5/cancel/" -Headers $bob
+→ before: 3 and 17. The cancel returns the order with "status":"cancelled". After: 5 and 20, so both products are back. The second cancel → 400 ... already cancelled ....
+
+Step 3: The admin moves Bob's order #7 along
+
+Send-Json PATCH "$api/orders/7/status/" @{ status = 'paid' } -Headers $bob
+Send-Json PATCH "$api/orders/7/status/" @{ status = 'delivered' } -Headers $admin
+Send-Json PATCH "$api/orders/7/status/" @{ status = 'paid' } -Headers $admin
+Send-Json PATCH "$api/orders/7/status/" @{ status = 'shipped' } -Headers $admin
+Send-Json POST "$api/orders/7/cancel/" -Headers $bob
+1. Bob → 403: customers can't change statuses.
+2. pending → delivered → 400 ... cannot be changed to delivered.
+3. → paid ✅
+4. → shipped ✅
+5. Bob tries to cancel his shipped order → 400 ... already shipped and can no longer be cancelled. Please contact us.
+
+Step 4: The admin buttons, including a refused move
+
+Open http://127.0.0.1:8000/admin/ → Orders.
+1. Tick #6 (pending) and #7 (shipped), choose "Mark selected orders as delivered", and click Go. You'll see a green message "1 order(s) changed to delivered." (#7) and a yellow warning "Order #6: An order that is pending cannot be changed to delivered." Each order was checked on its own.
+2. Tick #6, choose "Cancel selected orders (returns stock)", and click Go. It's cancelled, and the cutting board's stock goes back up by 1. Check with (Invoke-RestMethod "$api/products/bamboo-cutting-board/").stock in Window 2. It was 28 after the two race demos, and it's 29 now.
+3. Open order #7 → History (top right). You'll see "Status changed to delivered.", with your admin account and the time.
+4. Try the By status filter on the right: Cancelled shows #5 and #6, and Delivered shows #7.
