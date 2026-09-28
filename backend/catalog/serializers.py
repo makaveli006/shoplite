@@ -3,6 +3,8 @@ from rest_framework import serializers
 
 from .models import Category, Product
 
+MAX_IMAGE_SIZE = 2 * 1024 * 1024  # 2 MB
+
 
 class CategorySerializer(serializers.ModelSerializer):
     """Full category, used by the /api/categories/ endpoints."""
@@ -56,9 +58,20 @@ class ProductSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
+        # Allow {"image": null} to remove a product's image.
+        extra_kwargs = {'image': {'allow_null': True}}
 
     def get_in_stock(self, obj):
         return obj.stock > 0
+
+    def validate_image(self, value):
+        """Field-level validation: runs for the "image" field only (after DRF/Pillow
+        have already checked that the upload is a real image)."""
+        if value and value.size > MAX_IMAGE_SIZE:
+            raise serializers.ValidationError(
+                f'The image is {value.size / 1024 / 1024:.1f} MB. The maximum is 2 MB.'
+            )
+        return value
 
     def validate(self, attrs):
         """Object-level validation: runs after every field has been validated on its own."""

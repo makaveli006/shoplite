@@ -3290,3 +3290,366 @@ curl.exe -s "$api/products/?ordering=stock" | Select-String -Pattern '"count":\d
                                                                                                                                                  Step 5: See the SQL the pipeline builds (optional)
                                                                                                                                                  uv run python manage.py shell -c "from django.test import Clienection, reset_queries; c = Client(HTTP_HOST='localhost',HTTP_ACCEPT='application/json'); reset_queries(); c.get('/api/products/?category=kitchen&min_price=15&search=board&ordering=price&page_size=2'); [print(q['sql'], '\n') for q in connection.queries]"
 Two queries: a SELECT COUNT(*) ... for count, and the page query with every step visible: INNER JOIN catalog_category, WHERE is_active AND category.slug = 'kitchen' AND price >= 15 AND (name ILIKE '%board%' OR ...), Ohe tie-breaker), LIMIT 2.
+
+
+
+
+psycopg-binary v3.3.6 (extra: binary)
+tzdata v2026.4
+  ├── django-filter v25.1
+  │   └── django v5.1.7 (*)
+  ├── djangorestframework v3.17.2
+  │   └── django v5.1.7 (*)
+
+utting Board          18.00
+  Terracotta Plant Pot          15.00
+  Gel Pen Set                   7.99
+  Chef Knife                    49.99
+  Blue Ceramic Mug              12.50
+                      price
+            stock
+  ----                -----
+  Linen Cushion Cover     0
+
+
+What & why
+
+In Lesson 3.5 images could only be uploaded through the Django admin. The React admin screens (Phase 14) need to upload product photos through the API. JSON can't carry files, so we use a different request format: multipart/form-data.
+
+Good news: ModelViewSet already accepts multipart uploads. Today we test that, and add the protections a real shop needs:
+- a 2 MB size limit (a field-level validator)
+- the ability to remove an image ({"image": null})
+
+Files involved
+backend/catalog/serializers.py   ← ✏️ validate_image() (2 MB limit); image may be null (to remove it)
+
+What my verification found (and fixed)
+
+I tested uploads inside a rolled-back transaction and deleted the test file afterwards, so your data and media\ folder are unchanged. Results:
+
+┌──────────────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│       Test       │                                                              Result                                                              │
+├──────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Small PNG        │ 200, with an absolute image URL                                                                                                  │
+├──────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 4.1 MB image     │ 400 The image is 4.1 MB. The maximum is 2 MB. (our new validator)                                                                │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Text file named  │ 400 Upload a valid image... (Pillow)                                                                                             │
+│ .jpg             │                                                                                                     │
+├──────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ {"image": null}  │ ❌ 400 This field may not be null. There was no way to remove an image through the API. Fixed with extra_kwargs = {'image':      │
+│                  │ {'allow_null': True}}, and now 200, with the column stored as ''.                                                                │
+└──────────────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+My first test attempt also returned 415 Unsupported Media Type. My test tool had sent the file with the wrong Content-Type, so DRF had no parser for it. You'll meet 415 in Concept 2.
+
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend> (cts/?page=2").results | Select-Object name, price |Format-Table
+
+  name                          price
+  ----                          -----
+  A5 Dotted Notebook            9.50
+  Glass Storage Jars (Set of 3) 22.00
+  Cast Iron Skillet             39.90
+  Bamboo Cutting Board          18.00
+  Terracotta Plant Pot          15.00
+  Gel Pen Set                   7.99
+  Chef Knife                    49.99
+  Blue Ceramic Mug              12.50
+
+
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend> (Invoke-RestMethod "$api/products/?search=mug").results | Select-Object name
+
+  name
+  ----
+  Blue Ceramic Mug
+
+
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend> (Invoke-RestMethod
+  "$api/products/?category=kitchen&min_price=15&max_price=45&ordt-Object name, price
+
+  name                          price
+  ----                          -----
+  Bamboo Cutting Board          18.00
+  Glass Storage Jars (Set of 3) 22.00
+  Cast Iron Skillet             39.90
+
+
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend> (Invoke-RestMethod "$api/products/?in_stock=false").results | Select-Object name, stock
+
+  name                stock
+  ----                -----
+  Linen Cushion Cover     0
+
+
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend> $r = Invoke-RestMethod "$api/products/?ordering=-price&page_size=3"
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend> $r.results | Select-Object name, price; $r.next
+
+  name                        price
+  ----                        -----
+  Noise-Cancelling Headphones 149.00
+  Bluetooth Speaker           59.00
+  Chef Knife                  49.99
+  http://127.0.0.1:8000/api/products/?ordering=-price&page=2&page_size=3
+
+
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend> (Invoke-RestMethod "$api/categories/") | Select-Object name, slug
+
+  name          slug
+  ----          ----
+  Books         books
+  Electronics   electronics
+  Home & Garden home-garden
+  Kitchen       kitchen
+  Stationery    stationery
+
+
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend> curl.exe -s -w "  <- %{http_code}`n" "$api/products/?page=99"
+  {"detail":"Invalid page."}  <- 404
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend> curl.exe -s -w "  <- %{http_code}`n" "$api/products/?min_price=abc"
+  {"min_price":["Enter a number."]}  <- 400
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend> curl.exe -s "$api/products/?ordering=stock" | Select-String -Pattern '"count":\d+' -AllMatches | ForEach-Object { $_.Matches.Value }
+  "count":20
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend> uv run python manage.py shell -c "from django.test import Client; from django.db import connection, reset_queries; c = Client(HTTP_HOST='localhost', HTTP_ACCEPT='application/json'); reset_queries(); c.get('/api/products/?category=kitchen&min_price=15&search=board&ordering=price&page_size=2'); [print(q['sql'], '\n') for q in connection.queries]"
+  SELECT COUNT(*) AS "__count" FROM "catalog_product" INNER JOIN "catalog_category" ON ("catalog_product"."category_id" = "catalog_category"."id") WHERE ("catalog_product"."is_active" AND "catalog_category"."slug" = 'kitchen' AND "catalog_product"."price" >= 15 AND (UPPER("catalog_product"."name"::text) LIKE UPPER('%board%') OR UPPER("catalog_product"."description"::text) LIKE UPPER('%board%') OR UPPER("catalog_category"."name"::text) LIKE UPPER('%board%')))
+
+  SELECT "catalog_product"."id", "catalog_product"."category_id"catalog_product"."slug", "catalog_product"."description","catalog_product"."price", "catalog_product"."stock", "catalog_product"."image", "catalog_product"."is_active", "catalog_product"."created_at",
+  "catalog_product"."updated_at", "catalog_category"."id", "catag_category"."slug", "catalog_category"."description","catalog_category"."created_at", "catalog_category"."updated_at" FROM "catalog_product" INNER JOIN "catalog_category" ON ("catalog_product"."category_id" = "catalog_category"."id") WHERE ("catalog_product"."is_active" AND "catalog_category"."slug" = 'kitchen' AND "catalog_product"."price" >= 15 AND (UPPER("catalog_product"."name"::text) LIKE UPPER('%board%') OR UPPER("catalog_product"."description"::text) LIKE UPPER('%board%') OR UPPER("catalog_category"."name"::text) LIKE UPPER('%board%'))) ORDER BY "catalog_product"."price" ASC, "catalog_product"."id" DESC LIMIT 1
+
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend> c
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce> git add .
+  warning: in the working copy of 'backend/catalog/views.py', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'backend/pyproject.toml', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'backend/uv.lock', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'backend/catalog/filters.py', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'backend/core/filters.py', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'backend/core/pagination.py', LF will be replaced by CRLF the next time Git touches it
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce> git commit -m "Product search, filtering, stable ordering and pagination with django-filter"
+  [main 8ff578d] Product search, filtering, stable ordering and pagination with django-filter
+   8 files changed, 271 insertions(+)
+   create mode 100644 backend/catalog/filters.py
+   create mode 100644 backend/core/filters.py
+   create mode 100644 backend/core/pagination.py
+  continue
+
+● Update(catalog\serializers.py)
+Added 9 lines
+    def get_in_stock(self, obj):
+        return obj.stock > 0
+
+    def validate_image(self, value):
+        """Field-level validation: runs for the "image" field only (after DRF/Pillow
+        have already checked that the upload is a real image)."""
+        if value and value.size > MAX_IMAGE_SIZE:
+            raise serializers.ValidationError(
+                f'The image is {value.size / 1024 / 1024:.1f} MB. The maximum is 2 MB.'
+            )
+        return value
+
+    def validate(self, attrs):
+        """Object-level validation: runs after every field has been validated on its own."""
+        # When creating a product without a slug, Product.save() would build one from
+
+● Update(catalog\serializers.py)
+Added 2 lines
+
+from .models import Category, Product
+
+MAX_IMAGE_SIZE = 2 * 1024 * 1024  # 2 MB
+
+
+class CategorySerializer(serializers.ModelSerializer):
+    """Full category, used by the /api/categories/ endpoints."""
+
+
+  Ran 2 shell commands
+
+● Update(catalog\serializers.py)
+Added 2 lines
+            'created_at',
+            'updated_at',
+        ]
+        # Allow {"image": null} to remove a product's image.
+        extra_kwargs = {'image': {'allow_null': True}}
+
+    def get_in_stock(self, obj):
+        return obj.stock > 0
+
+  Ran 1 shell command
+
+Quick status: Lesson 4.6 is ready and verified. Image upload through the API works, there's a new 2 MB size limit, fake images are rejected, and {"image": null} now removes an image. That last one needed a small fix I found during testing. Here's the lesson.
+
+Phase 4, Lessons 4.6–4.7: Image uploads through the API, and an API review
+
+Lesson 4.5 checkpoint passed. uv add chose django-filter 25.1, just as the resolver predicted, and all queries and error codes match. Commit 8ff578d is in.
+
+Two corrections and details from your SQL output:
+1. I said search uses ILIKE. On PostgreSQL, Django actually generates UPPER(name::text) LIKE UPPER('%board%'), which is visible in your output. The effect is the same (case-insensitive "contains"), but your output shows the real implementation. Always trust the actual SQL over anyone's description, including mine. (Note that a leading % means Postgres can't use a normal index for this. That's fine for 21 products, and it's why big shops use full-text search.)
+2. LIMIT 1 instead of LIMIT 2: the COUNT(*) query ran first and found only 1 match (Bamboo Cutting Board). Django's paginator then knew fetching 2 rows was pointless and asked for exactly 1. That's why pagination always runs the count first.
+
+---
+
+What & why
+
+In Lesson 3.5 images could only be uploaded through the Django admin. The React admin screens (Phase 14) need to upload product photos through the API. JSON can't carry files, so we use a different request format: multipart/form-data.
+
+Good news: ModelViewSet already accepts multipart uploads. Today we test that, and add the protections a real shop needs:
+- a 2 MB size limit (a field-level validator)
+- the ability to remove an image ({"image": null})
+
+Files involved
+backend/catalog/serializers.py   ← ✏️ validate_image() (2 MB limit); image may be null (to remove it)
+
+What my verification found (and fixed)
+
+I tested uploads inside a rolled-back transaction and deleted the test file afterwards, so your data and media\ folder are unchanged. Results:
+
+┌──────────────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│       Test       │                                                              Result                                                              │
+├──────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Small PNG        │ 200, with an absolute image URL                                                                                                  │
+├──────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 4.1 MB image     │ 400 The image is 4.1 MB. The maximum is 2 MB. (our new validator)                                                                │
+├──────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Text file named  │ 400 Upload a valid image... (Pillow)                                                                │
+│ .jpg             │                                                                                                                                  │
+├──────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ {"image": null}  │ ❌ 400 This field may not be null. There was no way to remove an image through the API. Fixed with extra_kwargs = {'image':      │
+│                  │ {'allow_null': True}}, and now 200, with the column stored as ''.                                                                │
+└──────────────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+My first test attempt also returned 415 Unsupported Media Type. My test tool had sent the file with the wrong Content-Type, so DRF had no parser for it. You'll meet 415 in Concept 2.
+
+---
+
+Concept 1: multipart/form-data vs. JSON
+
+🧒 Simple: JSON is a letter. It can only contain text. To send a photo, you need a parcel with compartments: one compartment holds the photo, another holds a note saying "price: 19.99." That parcel format is called multipart.
+
+🛠️ Developer: A multipart request body is split into parts separated by a random boundary string. Each part has its own headers:
+Content-Type: multipart/form-data; boundary=----X1y2Z3
+
+------X1y2Z3
+Content-Disposition: form-data; name="image"; filename="mouse.png"
+Content-Type: image/png
+
+<raw binary bytes of the PNG>
+------X1y2Z3
+Content-Disposition: form-data; name="price"
+
+19.99
+------X1y2Z3--
+- Files travel as raw bytes. Encoding them inside JSON (as base64) would make them about 33% bigger and is awkward for servers.
+- HTML <form enctype="multipart/form-data">, curl's -F, and JavaScript's FormData (which React uses in Phase 14) all produce this format.
+
+Concept 2: Parsers and 415 Unsupported Media Type
+
+🧒 Simple: The mail room has specialists: one opens letters (JSON), one opens parcels (multipart), one opens simple form envelopes. The sticker on the outside (Content-Type) says which specialist to call. An unknown sticker → "we can't open this" (415).
+
+🛠️ Developer:
+- DRF's default parser_classes are JSONParser, FormParser, and MultiPartParser. On the first access to request.data, DRF picks the parser whose media type matches the request's Content-Type.
+- MultiPartParser stores uploaded files in request.data as UploadedFile objects. Small ones are kept in memory; big ones are streamed to a temp file.
+- No match → 415. You also saw this in Lesson 4.3 if you forgot the JSON header.
+
+Concept 3: Field-level validation (validate_<field>)
+
+🧒 Simple: Besides the general rules, the image checkpoint has its own inspector: "Is it really a photo? Is it too heavy to carry?"
+
+🛠️ Developer: The order of checks for image is:
+1. DRF's ImageField asks Pillow to open the bytes, so non-images are rejected regardless of the file extension. That includes SVG, which could contain scripts.
+2. Our validate_image(self, value), called automatically because of its name, checks value.size in bytes:
+MAX_IMAGE_SIZE = 2 * 1024 * 1024  # 2 MB
+
+def validate_image(self, value):
+    if value and value.size > MAX_IMAGE_SIZE:
+        raise serializers.ValidationError(f'The image is {value.size / 1024 / 1024:.1f} MB. The maximum is 2 MB.')
+    return value
+- if value: the value can now be None (image removal), and there's nothing to check then.
+- Why limit the size at all? Huge uploads fill the disk, slow down every product page, and waste customers' mobile data.
+
+Allowing removal is one line in Meta:
+extra_kwargs = {'image': {'allow_null': True}}   # {"image": null} removes the image
+extra_kwargs tweaks the auto-generated serializer field without redefining it. Django stores a "removed" image as '', matching blank=True. (The old file stays on disk, as a known limitation from Lesson 3.5.)
+
+---
+
+▶️ Your turn
+
+Window 1:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python manage.py check
+uv run python manage.py runserver
+
+Window 2: set up variables (use your passwords again) and crea
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"                                                                                          $admin    = "subin@ontash.net:YOUR_ADMIN_PASSWORD"
+$customer = "customer@example.com:YOUR_CUSTOMER_PASSWORD"
+$api      = "http://127.0.0.1:8000/api"
+
+uv run python -c "from PIL import Image, ImageDraw; im = Image.new('RGB', (400, 400), '#3b82f6'); ImageDraw.Draw(im).text((170, 190), 'MOUSE',           fill='white'); im.save(r'$env:TEMP\mouse.png')"
+uv run python -c "import os; from PIL import Image; Image.frombytes('RGB', (1200, 1200), os.urandom(1200*1200*3)).save(r'$env:TEMP\big.png')"
+Get-ChildItem "$env:TEMP\mouse.png", "$env:TEMP\big.png", "$env:TEMP\fake.jpg" | Select-Object Name, Length
+- The first line draws a blue placeholder image with the text "MOUSE".
+- The second fills a 1200×1200 image with random noise. Noise can't be compressed, so the PNG is about 4 MB.
+- fake.jpg is the text file from Lesson 3.5. If it's missing, run Set-Content $env:TEMP\fake.jpg "this is not an image".
+- PowerShell expands $env:TEMP inside the double-quoted string before Python runs, and r'...' makes Python read the Windows backslashes literally.
+
+Step 1: Upload an image with multipart (-F)
+
+curl.exe -i -u $admin -X PATCH -F "image=@$env:TEMP\mouse.png" "$api/products/wireless-mouse/"
+- -F "image=@path" builds a multipart body, and the @ means "attach the contents of this file." curl sets Content-Type: multipart/form-data; boundary=... for you. Don't add a JSON header here.
+- Expect 200, with "image":"http://127.0.0.1:8000/media/products/2026/09/mouse.png". Open that URL in the browser to see your blue square.
+
+Send a file and normal fields together (both travel as parts of one parcel):
+curl.exe -s -u $admin -X PATCH -F "image=@$env:TEMP\mouse.png" -F "stock=40" "$api/products/wireless-mouse/"
+→ stock is 40 and the image URL gets a random suffix (mouse_AbC123x.png), because the file name already existed (Lesson 3.5).
+                                                                                                                                                         Step 2: The validation cases
+                                                                                                                                                         curl.exe -s -w "  <- %{http_code}`n" -u $admin -X PATCH -F "im/products/wireless-mouse/"
+curl.exe -s -w "  <- %{http_code}`n" -u $admin -X PATCH -F "image=@$env:TEMP\fake.jpg" "$api/products/wireless-mouse/"
+curl.exe -s -w "  <- %{http_code}`n" -u $customer -X PATCH -F "image=@$env:TEMP\mouse.png" "$api/products/wireless-mouse/"
+curl.exe -s -w "  <- %{http_code}`n" -u $admin -X PATCH -H "Content-Type: text/plain" --data-binary "@$env:TEMP\mouse.png" "$api/products/wireless-mouse/"
+Expected:                                                                                                                                                1. {"image":["The image is 4.1 MB. The maximum is 2 MB."]}  <-
+2. {"image":["Upload a valid image. ..."]}  <- 400: Pillow
+3. {"detail":"You do not have permission to perform this action."}  <- 403: permissions run before parsing or validation
+4. {"detail":"Unsupported media type \"text/plain\" in request."}  <- 415: no parser for that Content-Type
+
+Step 3: Remove the image with JSON null, then put it back
+
+@{ image = $null } | ConvertTo-Json | Set-Content -Encoding ascii "$env:TEMP\noimage.json"
+Get-Content "$env:TEMP\noimage.json"
+curl.exe -s -u $admin -X PATCH -H "Content-Type: application/json" --data-binary "@$env:TEMP\noimage.json" "$api/products/wireless-mouse/"
+→ "image":null. The same endpoint accepted JSON this time, because DRF picked the parser from the Content-Type.
+
+Put the picture back (the React shop will look nicer with it):
+curl.exe -s -o NUL -w "%{http_code}`n" -u $admin -X PATCH -F "image=@$env:TEMP\mouse.png" "$api/products/wireless-mouse/"
+
+Step 4 (Lesson 4.7): Ask the API to describe itself with OPTIONS
+
+$meta = curl.exe -s -u $admin -X OPTIONS "$api/products/" | ConvertFrom-Json                                                                             $meta.name; $meta.parses
+$meta.actions.POST.price                                                                                                                                 $meta.actions.POST.category_id
+- parses lists the Content-Types this endpoint accepts: application/json, application/x-www-form-urlencoded, multipart/form-data.
+- actions.POST.price shows the rules DRF derived from the model: type: decimal, required: True, max_digits: 10, decimal_places: 2, min_value: 0.01.
+
+This is DRF's metadata feature. The browsable API uses it to build its forms. React won't need it, but it's a handy way to check "what exactly does this endpoint expect?"
+
+Step 5 (Lesson 4.7): The API so far, in one table
+
+┌───────────────────────────────────────────────────────────────────────────────────────────────┬─────────────────┬───────────────┬────────────────────┐
+│                                           Endpoint                                            │    Anonymous    │   Customer    │       Admin        │
+├───────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────┼───────────────┼────────────────────┤
+│ GET /api/categories/ (plain list)                                                             │ ✅              │ ✅            │ ✅                 │
+├───────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────┼───────────────┼────────────────────┤
+│ POST/PUT/PATCH/DELETE /api/categories/<slug>/                                                 │ 403             │ 403           │ ✅ (409 if it has  │
+│                                                                                               │                 │               │ products)          │
+├───────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────┼───────────────┼────────────────────┤
+│ GET                                                                                           │ ✅ active only  │ ✅ active     │ ✅ incl. hidden    │
+│ /api/products/?search=&category=&min_price=&max_price=&in_stock=&ordering=&page=&page_size=   │                 │ only          │                    │
+├───────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────┼───────────────┼────────────────────┤
+│ GET /api/products/<slug>/                                                                     │ ✅ / 404 if     │ ✅ / 404 if   │ ✅                 │
+│                                                                                               │ hidden          │ hidden        │                    │
+├───────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────┼───────────────┼────────────────────┤
+│ POST/PUT/PATCH/DELETE /api/products/<slug>/ (JSON or multipart)                               │ 403             │ 403           │ ✅                 │
+├───────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────┼───────────────┼────────────────────┤
+│ GET /api/ (API root)                                             │ 403 (deny by    │ ✅            │ ✅                 │
+│                                                                                               │ default)        │               │                    │
+└───────────────────────────────────────────────────────────────────────────────────────────────┴─────────────────┴───────────────┴────────────────────┘
+
+That's the full catalog API from the plan.
