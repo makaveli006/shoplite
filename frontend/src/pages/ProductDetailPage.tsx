@@ -3,6 +3,7 @@ import { AlertCircle, ChevronRight, ImageOff, PackageX } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useParams } from 'react-router'
 
+import { useAuth } from '@/auth/useAuth'
 import { QuantityPicker } from '@/components/products/QuantityPicker'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -33,6 +34,7 @@ export function ProductDetailPage() {
 function ProductDetails({ product }: { product: Product }) {
   const [quantity, setQuantity] = useState(1)
   const location = useLocation()
+  const { user } = useAuth()
 
   return (
     <article className="flex flex-col gap-6">
@@ -78,10 +80,16 @@ function ProductDetails({ product }: { product: Product }) {
           {product.in_stock ? (
             <div className="flex flex-wrap items-center gap-3">
               <QuantityPicker value={quantity} max={product.stock} onChange={setQuantity} />
-              {/* Adding to the cart needs a logged-in customer. Real "Add to cart" comes with login (Phase 12/13). */}
-              <Button asChild size="lg">
-                <Link to={`/login?next=${encodeURIComponent(location.pathname)}`}>Sign in to add to cart</Link>
-              </Button>
+              {/* Adding to the cart needs a logged-in customer. The real "Add to cart" arrives in Phase 13. */}
+              {user ? (
+                <Button size="lg" disabled>
+                  Add to cart (Phase 13)
+                </Button>
+              ) : (
+                <Button asChild size="lg">
+                  <Link to={`/login?next=${encodeURIComponent(location.pathname)}`}>Sign in to add to cart</Link>
+                </Button>
+              )}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">This product is currently out of stock.</p>

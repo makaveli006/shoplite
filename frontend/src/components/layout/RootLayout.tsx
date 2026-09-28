@@ -1,5 +1,7 @@
 import { Outlet, ScrollRestoration } from 'react-router'
 
+import { Toaster } from '@/components/ui/sonner'
+
 import { SiteHeader } from './SiteHeader'
 
 /** The frame around every page: header on top, the current page in the middle, footer below. */
@@ -16,6 +18,8 @@ export function RootLayout() {
       </footer>
       {/* Start each new page at the top; restore the old position on Back/Forward. */}
       <ScrollRestoration />
+      {/* Small pop-up messages ("Welcome back, Ana!") appear here. */}
+      <Toaster position="top-center" richColors />
     </div>
   )
 }

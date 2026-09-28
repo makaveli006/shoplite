@@ -1,7 +1,10 @@
-import { ShoppingCart } from 'lucide-react'
-import { Link, NavLink } from 'react-router'
+import { LogOut, ShoppingCart } from 'lucide-react'
+import { Link, NavLink, useNavigate } from 'react-router'
+import { toast } from 'sonner'
 
+import { displayName, useAuth } from '@/auth/useAuth'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 
 // NavLink tells us whether its page is the one currently open, so we can highlight it.
@@ -13,6 +16,15 @@ function navLinkClass({ isActive }: { isActive: boolean }) {
 }
 
 export function SiteHeader() {
+  const { user, status, logout } = useAuth()
+  const navigate = useNavigate()
+
+  function signOut() {
+    logout()
+    toast('You are signed out.')
+    navigate('/')
+  }
+
   return (
     <header className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
@@ -23,9 +35,24 @@ export function SiteHeader() {
           <NavLink to="/products" className={navLinkClass}>
             Products
           </NavLink>
-          <NavLink to="/login" className={navLinkClass}>
-            Sign in
-          </NavLink>
+
+          {status === 'loading' && <Skeleton className="h-7 w-24" />}
+
+          {status === 'anonymous' && (
+            <NavLink to="/login" className={navLinkClass}>
+              Sign in
+            </NavLink>
+          )}
+
+          {user && (
+            <>
+              <span className="px-2 text-sm text-muted-foreground">Hi, {displayName(user)}</span>
+              <Button variant="ghost" size="sm" onClick={signOut}>
+                <LogOut /> Sign out
+              </Button>
+            </>
+          )}
+
           <Button asChild variant="outline" size="icon" aria-label="Cart">
             <Link to="/cart">
               <ShoppingCart />

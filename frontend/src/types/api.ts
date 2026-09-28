@@ -8,6 +8,23 @@ export interface Paginated<T> {
   results: T[]
 }
 
+/** The logged-in user, from GET /api/auth/me/ */
+export interface User {
+  id: number
+  email: string
+  username: string
+  first_name: string
+  last_name: string
+  is_staff: boolean
+  date_joined: string
+}
+
+/** What POST /api/auth/token/ returns after a successful login. */
+export interface TokenPair {
+  access: string
+  refresh: string
+}
+
 export interface CategorySummary {
   id: number
   name: string

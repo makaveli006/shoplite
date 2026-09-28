@@ -6401,3 +6401,120 @@ npm run build
 cd ..
 git add frontend
 git commit -m "Product detail page: breadcrumb, stock, quantity picker, not-found handling, prefetch on hover, tab titles"
+
+
+
+lesson.
+
+Phase 12, Lesson 12.1: Signing in and registering from the frontend
+
+Lesson 11.3 committed as 1fd4dff. (That build's "larger than 500 kB" note is still only a suggestion. It's on my list for before deployment.)
+
+What & why
+
+The backend has had login since Phase 5, but the shop's Sign in page is still a placeholder, so customers can't use their accounts yet. This lesson makes the frontend a real front door:
+- a Sign in form and a Create account form, with clear error messages
+- keeping the customer logged in, including after closing and reopening the page
+- the header changing to "Hi, Ana" with a Sign out button
+- after signing in, returning the customer to where they came from (for example, the product they wanted to buy)
+
+What happens now
+
+Signing in:
+1. The customer enters email and password and presses Sign in. The button changes to "Signing in..." and can't be clicked twice.
+2. The shop sends them to the API's login address (Lesson 5.1) and gets back the two tokens: the short-lived access token (15 minutes) and the long-lived refresh token (7 days).
+3. It immediately asks the API "who am I?" (/api/auth/me/, Lesson 5.2) to learn the customer's name and whether they're an admin.
+4. A small message pops up at the top, "Welcome back, Ana!", and the header now shows Hi, Ana and Sign out instead of Sign in.
+5. The customer is sent back to the page they came from. Remember the "Sign in to add to cart" button that added ?next=/products/chef-knife (Lesson 11.3)? That's used now. They land on the Chef Knife again, and the button there has changed.
+6. Wrong password: "Wrong email or password." We deliberately don't say which one was wrong, for the same reason the API doesn't (Lesson 5.1).
+
+Where the tokens are kept (a security decision):
+- The access token stays only in the page's memory. It's sent automatically with every request to the API, which is how the API knows who's asking. It vanishes when the tab is closed or reloaded, which makes it harder to steal.
+- The refresh token is saved in the browser's own small storage area (localStorage), so it survives a reload. Its only job is to get new access tokens.
+- When the page opens and a refresh token is saved, the shop quietly swaps it for a fresh access token and asks "who am I?" again. The customer stays logged in without typing anything. While that check is running, the header shows a small grey placeholder instead of flickering between "Sign in" and "Hi, Ana".
+- If the saved refresh token is expired or invalid, it's thrown away, and the customer simply sees "Sign in". If the server is just unreachable, the token is kept, so a network hiccup doesn't log anyone out.
+- An honest trade-off: anything in localStorage can be read by JavaScript running on our page. If a malicious script ever got onto the shop (an "XSS" attack), it could steal the refresh token. The main defence is never letting untrusted scripts onto the page. React already protects against the most common way in (it treats text as text, never as code). Bigger shops keep the refresh token in a special cookie that JavaScript can't read at all, but that needs extra backend setup, so it's beyond this course.
+
+Registering:
+- The form asks for first name, last name, username, email, and password. The server decides whether it's valid (Lesson 5.2), and its messages appear under the right field, for example "An account with this email already exists." under Email and "A user with that username already exists." under Username.
+- The server checks the password rules (length, too common, only numbers) after the other fields are fine. So if the email and username are already taken, you'll see those errors first, and the password errors once those are fixed.
+- On success, the customer is logged in straight away and sees "Welcome to ShopLite, Ana!". Nobody wants to type their details twice.
+
+Signing out:
+- Both tokens are removed from memory and storage.
+- Everything loaded for that customer is forgotten (later, their cart and orders), so the next person using the same computer can't see them.
+- They see "You are signed out.", return to the home page, and the header shows Sign in again.
+
+Two safety details:
+- If someone who is already signed in opens the Sign in or Create account page, they're simply sent on to their destination.
+- The "go back to where you came from" address is only accepted if it points inside our shop. Otherwise a trick link like /login?next=https://evil-site.example could send customers to a fake website right after they sign in. This is called an open redirect, and it's a common phishing trick.
+
+On the product page: signed-out visitors still see "Sign in to add to cart". Signed-in customers see "Add to cart (Phase 13)", greyed out until the cart pages exist.
+
+What I built
+
+- The login state for the whole app: who is signed in, plus sign in, register, and sign out, available to every page and to the header
+- Token handling: where tokens are kept, and the automatic attachment of the access token to every API request, done once in the shared connection (the place I mentioned in Lesson 11.2)
+- Real Sign in and Create account pages, with a reusable "labelled box with error messages" piece that we'll reuse for the checkout form
+- Pop-up messages (the shadcn sonner component from Lesson 10.2) switched on for the whole shop
+- The header with the greeting and Sign out
+- The "stay inside our shop" check for ?next=
+
+No new packages this time.
+
+---
+
+▶️ Your turn
+
+Django running in Window 1; in the frontend window:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\frontend"
+npm run dev
+
+Step 1: From a product to signing in, and back
+
+1. Open http://localhost:5173/products/chef-knife and click Sign in to add to cart.
+2. Enter ana.silva@example.com and a wrong password, then press Sign in. You get Wrong email or password.
+3. Enter the right password (Sunny-Garden-42). You'll see:
+   - the pop-up "Welcome back, Ana!"
+   - you're back on the Chef Knife page
+   - the header says Hi, Ana and Sign out
+   - the button now says Add to cart (Phase 13)
+
+Step 2: Look at the tokens
+
+Press F12:
+1. Network tab → Fetch/XHR → reload the page (F5). You'll see refresh/ first (swapping the saved refresh token for a new access token), then me/, and you're still signed in. Click me/ → Headers → Request Headers: there's Authorization: Bearer eyJ..., attached automatically.
+2. Application tab → Local storage → http://localhost:5173: one entry, shoplite.refresh. That's the refresh token and nothing else. The access token is nowhere in storage, only in memory.
+
+Step 3: Sign out
+
+Click Sign out. You get "You are signed out.", you're on the home page, and the header shows Sign in. In Application → Local storage, shoplite.refresh is gone. Reload, and you stay signed out.
+
+Step 4: Registration errors, then a new account
+
+Click Sign in → Create one:
+1. Fill in username customer1, email CUSTOMER@example.com, password 12345678, and press Create account. Errors appear under Username (already exists) and Email (already exists, even with different capitals, Lesson 5.2).
+2. Change the username to carol and the email to carol@example.com (keep 12345678), and submit. Now the password errors appear: too common and entirely numeric.
+3. Use a proper password, for example Blue-River-2026, add first name Carol, and submit. You get "Welcome to ShopLite, Carol!", you're signed in immediately, and the header says Hi, Carol.
+
+Step 5: The open-redirect guard
+
+Sign out, then open http://localhost:5173/login?next=https://example.com and sign in as Carol. You land on the ShopLite home page, not on example.com. The foreign address was ignored.
+
+Step 6: Build and commit
+
+Stop the dev server, then:
+npm run build
+cd ..
+git add frontend
+git commit -m "Frontend sign in / register / sign out: auth state, token storage, Authorization header, header greeting, safe next redirect"
+
+---
+
+❓ If something goes wrong
+2. Change the username to carol and the email to carol@example.com (keep 12345678), and submit. Now the password errors appear: too common and entirely numeric.
+3. Use a proper password, for example Blue-River-2026, add first name Carol, and submit. You get "Welcome to ShopLite, Carol!", you're signed in immediately, and the header says Hi, Carol.
+
+Step 5: The open-redirect guard
+
+Sign out, then open http://localhost:5173/login?next=https://example.com and sign in as Carol. You land on the ShopLite home page, not on example.com. The foreign address was ignored.
