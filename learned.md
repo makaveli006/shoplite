@@ -5809,3 +5809,143 @@ Click a file: lines run by tests are green, and missed ones are red. (.coverage 
 │ question Type 'yes'                                 │ didn't clean up                              │ with --noinput                                 │
 ├─────────────────────────────────────────────────────┼──────────────────────
 ---
+
+
+
+
+
+
+
+Phase 10, Lesson 10.1: Creating the React frontend with Vite
+
+Phase 9 checkpoint passed: 39 tests OK, every test name listed, and 90% coverage. Commit d4fe5be is in. (Your two test orders runs both said OK, so it looks like the deliberate break in Step 2 wasn't saved before running. Try it again whenever you like. Seeing a test fail on purpose is worth it once.)
+
+🎉 The backend is complete. Now we build what customers actually see.
+
+What & why
+
+Everything we built so far lives on the server. Customers will never type PowerShell commands. They'll open a website, see products, click "Add to cart", and fill in a checkout form. That website is the frontend. It runs inside the customer's browser and talks to our API exactly the way your PowerShell commands did: it asks for products, sends the login, adds items to the cart.
+
+We'll build it with these tools, each doing one job:
+- React builds the page out of reusable pieces, called components: a product card, a navigation bar, a cart line, a "Place order" button. You describe what each piece should look like for the current data (say, "this card shows this product's name, picture, and price"). When the data changes (an item is added to the cart), React updates just the parts of the page that need to change. The page never has to be reloaded.
+- TypeScript is JavaScript (the browser's programming language) plus labels describing what each piece of data looks like, for example "a product has a name, which is text, and a price." Your editor can then warn you while you type if you use data wrongly, like misspelling prcie or treating a price as a list, long before a customer would hit the bug.
+- Vite is the development tool around it all:
+  - While you work, it runs a small development server (at http://localhost:5173, the address we already allowed through CORS in Lesson 5.3). The moment you save a file, the change appears in the browser without a reload, usually in well under a second.
+  - When the shop is finished, Vite builds the final optimised files for a real server.
+
+How the frontend fits with what we have
+
+During development, two servers run side by side:
+
+┌──────────────────────────────┬───────────────────────┬───────────────────────────────────────────────────┐
+│            Server            │        Address        │             What it gives the browser             │
+├──────────────────────────────┼───────────────────────┼───────────────────────────────────────────────────┤
+│ Vite (new)                   │ http://localhost:5173 │ the app itself: the pages, components, and styles │
+├──────────────────────────────┼───────────────────────┼───────────────────────────────────────────────────┤
+│ Django (Window 1, as before) │ http://127.0.0.1:8000 │ the data, through /api/...                        │
+└──────────────────────────────┴───────────────────────┴───────────────────────────────────────────────────┘
+
+The customer's browser loads the app from Vite, and the app then calls Django's API for products, login, cart, and orders. That's exactly the "different origins" situation from the CORS lesson, and why we set it up back then.
+
+JavaScript's equivalents of what you already know
+
+You've already learned the same ideas with uv, so the JavaScript side will feel familiar:
+
+┌───────────────────────────────────┬─────────────────────────────┬───────────────────────────────────────────────────────────┐
+│       Python / uv (backend)       │ JavaScript / npm (frontend) │                        What it is                         │
+├───────────────────────────────────┼─────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ uv                                │ npm (comes with Node.js)    │ the package manager                                       │
+├───────────────────────────────────┼─────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ pyproject.toml                    │ package.json                │ the list of packages the project needs, plus its commands │
+├───────────────────────────────────┼─────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ uv.lock                           │ package-lock.json           │ the exact versions actually installed (commit it)         │
+├───────────────────────────────────┼─────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ .venv\                            │ node_modules\               │ the installed packages (never committed, rebuildable)     │
+├───────────────────────────────────┼─────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ uv run python manage.py runserver │ npm run dev                 │ start the development server                              │
+└───────────────────────────────────┴─────────────────────────────┴───────────────────────────────────────────────────────────┘
+
+What happens in this lesson
+
+We create the frontend folder next to backend, install its packages, start Vite, and see the starter page. You'll make one small change and watch it appear instantly. Then we build the final files once, to see what a real deployment would get. We won't style anything or talk to the API yet. That's the next lessons.
+
+---
+
+▶️ Your turn
+
+Step 0: Pause OneDrive
+
+npm install creates thousands of small files in node_modules. Pause OneDrive syncing for 2 hours (cloud icon → ⚙️ → Pause syncing), exactly as in Lesson 0.3.
+
+Step 1: Create the project
+
+From the project root (in a new window; Django can keep running in Window 1):
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+npm create vite@latest frontend -- --template react-ts --no-interactive
+- npm create vite@latest downloads and runs Vite's project creator (version 9.x). You may see "The following package was not found and will be installed: create-vite@...". That's npm fetching the creator itself, which is fine.
+- frontend is the folder name, --template react-ts means React with TypeScript, and --no-interactive means "don't ask questions, use what I said."
+- The lone -- in the middle tells npm "everything after this is for the Vite creator, not for npm."
+
+Expected: Scaffolding project in ...\django-ecommerce\frontend... and Done. Now run: cd frontend, npm install, npm run dev.
+
+Step 2: Install the packages
+
+cd frontend
+npm install
+npm reads package.json, downloads everything into node_modules, and writes package-lock.json. It ends with something like added 60 packages ... found 0 vulnerabilities.
+
+Look at what you got:
+Get-ChildItem
+Get-Content package.json
+The main files and folders:
+
+┌────────────────────────────┬───────────────────────────────────────────────────────────────────────────────────┐
+│            Item            │                                   What it's for                                   │
+├────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
+│ index.html                 │ The single HTML page the browser loads. It's almost empty, and React fills it in. │
+├────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
+│ src\main.tsx               │ The starting point: it tells React to draw the app inside that page               │
+├────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
+│ src\App.tsx                │ The top component, and everything you see comes from here. We'll replace it soon. │
+├────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
+│ src\index.css, src\App.css │ Styles for the starter page (replaced by Tailwind next lesson)                    │
+├────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
+│ src\assets\, public\       │ Images and icons for the starter page                                             │
+├────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
+│ vite.config.ts             │ Vite's settings                                                                   │
+├────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
+│ tsconfig*.json             │ TypeScript's settings                                                             │
+├────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
+│ package.json               │ Packages and commands (dev, build, lint, preview)                                 │
+├────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
+│ .gitignore                 │ Tells Git to ignore node_modules and dist                                         │
+└────────────────────────────┴───────────────────────────────────────────────────────────────────────────────────┘
+
+In package.json, check the versions: react ^19.2, vite ^8.3, and typescript ~6.0, the versions from our plan. (^ means "this version or a newer compatible one," like >= in pyproject.toml. The exact versions are fixed in package-lock.json.)
+
+Step 3: Start the development server
+
+npm run dev
+Expected:
+  VITE v8.3.x  ready in 300 ms
+
+  ➜  Local:   http://localhost:5173/
+Open http://localhost:5173. You'll see the Vite + React starter page with a "Count is 0" button. Click it a few times. The number goes up without the page reloading: React only redraws the part that changed.
+
+Step 4: Instant updates (hot reload)
+
+Keep the browser visible. Open frontend\src\App.tsx in your editor, find the text Get started, and change it to ShopLite is coming. Save.
+
+The heading changes in the browser within a fraction of a second, and the counter keeps its number. Vite replaced only the changed piece instead of restarting the page. This is what makes frontend work fast: change, save, look.
+
+Now try a mistake on purpose: delete the closing </h1> and save. Instead of a blank page, Vite shows a red error overlay in the browser, naming the file, line, and problem, and the terminal shows the same. Put </h1> back and save, and the page recovers by itself.
+
+Stop the server with Ctrl+C in the terminal.
+
+Step 5: Build the final files (what a real server would get)
+
+npm run build
+Get-ChildItem dist, dist\assets
+The build first runs TypeScript's full check of every file. If anything is wrong, it stops here, which is another safety net. Then Vite produces a dist folder with an index.html and a few files in dist\assets with odd names like index-Cx8a2.js. These are all our code and React squeezed into a few small files. The random part of the name changes whenever the content changes, so browsers always fetch the newest version. This folder is what you'd upload to a web host. It's ignored by Git, because it can always be rebuilt.
+
+(Optional: npm run preview serves that finished dist folder at http://localhost:4173, so you can check the production version. Ctrl+C to stop.)
