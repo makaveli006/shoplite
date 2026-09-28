@@ -5497,3 +5497,158 @@ Paste:
 Next: Lesson 8.2, the worker in Docker. We build a Docker image of our backend (installed with uv, just like on Windows), add a worker next to PostgreSQL and Redis, start it, and watch it pick up the two waiting notes and print the two confirmation emails.
 
 ✻ Sautéed for 2m 53s · done 8:04 PM
+
+
+
+
+Quick status: the worker image builds, and inside the container it can reach the database and Redis. I checked this without starting the worker, so your two waiting emails are still in the line for you to watch. Here's the lesson.
+
+Phase 8, Lesson 8.2: The worker in Docker
+
+Lesson 8.1 checkpoint passed: checkout took 0.64 s, the note for order #10 appeared in Redis (you can see "task": "orders.tasks.send_order_confirmation" and "argsrepr": "(10,)" in it), the failed checkout added nothing, and the second order brought the line to 2. Commit 1d71fb2 is in.
+
+What & why
+
+Two confirmation emails are waiting in Redis, and nobody is picking them up. We need the worker: a program that keeps watching the line and does each job. We decided in the plan to run it inside Docker, next to PostgreSQL and Redis, because that's how it would run on a real server. It also avoids the fact that Celery doesn't officially support Windows. So we need two things:
+1. A recipe for a container that contains Python and our backend with all its packages (the same ones, in the same versions, as on your Windows machine)
+2. An entry in our Docker setup that starts that container as the worker
+
+What happens now
+
+- Building the container. Docker follows the recipe:
+  a. start from a small Linux system that already has Python 3.12
+  b. add uv
+  c. install exactly the package versions listed in uv.lock, the same list your Windows setup uses (Lesson 2.1), so the worker and Django always run identical code libraries
+  d. copy in the backend code
+
+  Installing packages is the slow part, so Docker remembers that step and only repeats it when your package list changes. Rebuilding after a code change takes seconds. Your Windows .venv, uploaded images, and .env secrets are left out of the container on purpose. The container gets its own Linux environment instead.
+- Starting the worker. When you run docker compose up, the worker waits until PostgreSQL and Redis report healthy (the health checks from Lesson 1.2), then connects to Redis and starts picking up notes. It handles up to two jobs at the same time.
+- How the worker finds the database and Redis. On Windows, Django reaches them through localhost and the forwarded ports (5433 and 6379, Lesson 1.1). Inside Docker, containers talk to each other directly by service name: the worker reaches the database at db and Redis at redis. So the worker gets those two addresses as its own settings, and they take priority over the Windows values in backend/.env. That's the "real environment wins over .env" rule from Lesson 2.3, which we prepared for back then. Everything else, like the secret key and database password, it reads from the same .env.
+- Your code folder is shared with the worker. The container reads the backend code straight from your folder, so you don't need to rebuild the container after changing code. But the worker only reads the code when it starts, so after changing a background job, restart the worker. Only a change to the package list (uv add ...) needs a rebuild.
+- What the worker does for each note: it takes the note out of the line, loads the order from PostgreSQL, builds the email, and "sends" it. In development that means printing it into the worker's log, which you'll read with docker compose logs. If something goes wrong, it retries later (Lesson 8.1).
+- For safety, the worker runs as a normal user inside the container, not as the all-powerful administrator account, so a bug in a job can't damage the container's system.
+
+What I added
+
+- backend/Dockerfile: the recipe for the worker container
+- backend/.dockerignore: the list of things that must not go into the container (.venv, media, .env, …)
+- A worker entry in docker-compose.yml, next to db and redis
+
+I built the container and ran a one-time check inside it, without starting the worker:
+- Python 3.12.14 ✓
+- Celery installed ✓
+- Django's system check passes ✓
+- it can reach the database (orders [X] 0001_initial) ✓
+- it sees DB_HOST=db and CELERY_BROKER_URL=redis://redis:6379/0 ✓
+- your two notes are still waiting ✓
+
+---
+
+▶️ Your turn
+
+The API should still be running in Window 1 (runserver). Use Window 2 from the project root:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+
+Step 1: Start the worker, and watch it catch up on the waiting emails
+
+docker compose exec redis redis-cli LLEN celery
+docker compose up -d --build worker
+docker compose logs -f worker
+- LLEN → 2, the two waiting notes.
+- up -d --build worker builds the container (quick, because I already built it once and Docker remembers the slow steps) and starts it in the background.
+- logs -f shows the worker's output and keeps following it. You'll see:
+  a. Celery's start-up banner, with transport: redis://redis:6379/0 (it found Redis by its service name) and [tasks] . orders.tasks.send_order_confirmation (it found our job)
+  b. celery@... ready.
+  c. Two blocks like this, one per waiting note:
+Task orders.tasks.send_order_confirmation[a0e08523-...] received
+Content-Type: text/plain; charset="utf-8"
+Subject: ShopLite order #10 confirmation
+From: ShopLite <orders@shoplite.local>
+To: ana.silva@example.com
+...
+Hi Ana Silva,
+
+Thank you for your order #10! ...
+  2 x Gel Pen Set @ 7.99 = 15.98
+
+  Total: 15.98
+...
+Task orders.tasks.send_order_confirmation[...] succeeded in 0.05s: 'Confirmation for order #10 sent to ana.silva@example.com'
+     The second block is the same for order #11.
+
+Press Ctrl+C to stop following the log. The worker itself keeps running in the background.
+
+docker compose exec redis redis-cli LLEN celery
+docker compose ps
+→ 0, so the line is empty. And docker compose ps now shows three services: db, redis, and worker.
+
+Step 2: A new order, live
+
+Open a third window and follow the worker's log there:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+docker compose logs -f --tail 0 worker
+(--tail 0 means "show only new lines from now on.")
+
+In Window 2, Bob places an order:
+. .\tools\api-helpers.ps1
+$bob  = Get-AuthHeader 'bob@example.com' 'Sunny-Garden-42'
+$mug  = (Invoke-RestMethod "$api/products/blue-ceramic-mug/").id
+$ship = @{ full_name = 'Bob Builder'; address = '5 Hammer Lane'; city = 'Test City'; postal_code = '12345'; country = 'Testland' }
+Send-Json POST "$api/cart/items/" @{ product_id = $mug } -Headers $bob | Out-Null
+(Invoke-RestMethod -Method Post -Uri "$api/orders/checkout/" -Headers $bob -ContentType 'application/json' -Body ($ship | ConvertTo-Json)).id
+Within about a second of the order number appearing in Window 2, Bob's confirmation email appears in Window 3. The customer got their answer immediately, and the email was handled separately right after.
+
+Step 3: What if the worker is down?
+
+docker compose stop worker
+Send-Json POST "$api/cart/items/" @{ product_id = $mug } -Headers $bob | Out-Null
+(Invoke-RestMethod -Method Post -Uri "$api/orders/checkout/" -Headers $bob -ContentType 'application/json' -Body ($ship | ConvertTo-Json)).id
+docker compose exec redis redis-cli LLEN celery
+The checkout still works normally. The note simply waits in the line (LLEN → 1), because nobody is processing it. Now bring the worker back:
+docker compose start worker
+docker compose exec redis redis-cli LLEN celery
+After a few seconds LLEN → 0, and the email for that order appears in Window 3. Nothing was lost while the worker was down. That's the big advantage of the waiting line: the shop and the worker don't need to be running at the same moment.
+
+(Stop following the log in Window 3 with Ctrl+C when you're done.)
+
+Step 4: Commit
+
+git status
+git add backend/Dockerfile backend/.dockerignore docker-compose.yml
+git commit -m "Celery worker in Docker: uv-based image, worker service in compose"
+
+---
+
+❓ If something goes wrong
+
+┌─────────────────────────────────────────────────────────────┬─────────────────────────────┬────────────────────────────────────────────────────────┐
+→ 0, so the line is empty. And docker compose ps now shows three services: db, redis, and worker.
+
+Step 2: A new order, live
+
+Open a third window and follow the worker's log there:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+docker compose logs -f --tail 0 worker
+(--tail 0 means "show only new lines from now on.")
+
+In Window 2, Bob places an order:
+. .\tools\api-helpers.ps1
+$bob  = Get-AuthHeader 'bob@example.com' 'Sunny-Garden-42'
+$mug  = (Invoke-RestMethod "$api/products/blue-ceramic-mug/").id
+$ship = @{ full_name = 'Bob Builder'; address = '5 Hammer Lane'; city = 'Test City'; postal_code = '12345'; country = 'Testland' }
+Send-Json POST "$api/cart/items/" @{ product_id = $mug } -Headers $bob | Out-Null
+(Invoke-RestMethod -Method Post -Uri "$api/orders/checkout/" -Headers $bob -ContentType 'application/json' -Body ($ship | ConvertTo-Json)).id
+Within about a second of the order number appearing in Window 2, Bob's confirmation email appears in Window 3. The customer got their answer immediately, and the email was handled separately right after.
+
+Step 3: What if the worker is down?
+
+docker compose stop worker
+Send-Json POST "$api/cart/items/" @{ product_id = $mug } -Headers $bob | Out-Null
+(Invoke-RestMethod -Method Post -Uri "$api/orders/checkout/" -Headers $bob -ContentType 'application/json' -Body ($ship | ConvertTo-Json)).id
+docker compose exec redis redis-cli LLEN celery
+The checkout still works normally. The note simply waits in the line (LLEN → 1), because nobody is processing it. Now bring the worker back:
+docker compose start worker
+docker compose exec redis redis-cli LLEN celery
+After a few seconds LLEN → 0, and the email for that order appears in Window 3. Nothing was lost while the worker was down. That's the big advantage of the waiting line: the shop and the worker don't need to be running at the same moment.
+
+(Stop following the log in Window 3 with Ctrl+C when you're done.)

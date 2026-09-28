@@ -29,5 +29,26 @@ services:
       timeout: 3s
       retries: 10
 
+  # Celery worker: runs background jobs (order confirmation emails).
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    command: celery -A config worker --loglevel=info --concurrency=2
+    environment:
+      # Inside Docker, the other containers are reached by their service names.
+      # These win over the values in backend/.env (which are for Django on Windows).
+      DB_HOST: db
+      DB_PORT: "5432"
+      CELERY_BROKER_URL: redis://redis:6379/0
+    volumes:
+      # Use the code from your folder, so changes don't need an image rebuild
+      # (restart the worker after changing tasks: docker compose restart worker).
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   pgdata:

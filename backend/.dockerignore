@@ -1,0 +1,9 @@
+# Files that are NOT copied into the Docker image.
+.venv/
+__pycache__/
+*.py[cod]
+media/
+.env
+*.sqlite3
+.pytest_cache/
+htmlcov/
