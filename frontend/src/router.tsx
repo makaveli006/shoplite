@@ -1,9 +1,11 @@
-import { createBrowserRouter } from 'react-router'
+import { createBrowserRouter, Navigate } from 'react-router'
 
+import { AdminLayout } from '@/components/admin/AdminLayout'
 import { RequireAdmin, RequireAuth } from '@/components/auth/RouteGuards'
 import { RootLayout } from '@/components/layout/RootLayout'
 import { AccountPage } from '@/pages/AccountPage'
-import { AdminHomePage } from '@/pages/admin/AdminHomePage'
+import { AdminComingSoon } from '@/pages/admin/AdminComingSoon'
+import { AdminProductsPage } from '@/pages/admin/AdminProductsPage'
 import { CartPage } from '@/pages/CartPage'
 import { CheckoutPage } from '@/pages/CheckoutPage'
 import { HomePage } from '@/pages/HomePage'
@@ -45,7 +47,17 @@ export const router = createBrowserRouter([
       {
         path: 'admin',
         Component: RequireAdmin,
-        children: [{ index: true, Component: AdminHomePage }],
+        children: [
+          {
+            Component: AdminLayout, // title + tabs
+            children: [
+              { index: true, element: <Navigate to="products" replace /> }, // /admin opens the products tab
+              { path: 'products', Component: AdminProductsPage },
+              { path: 'categories', element: <AdminComingSoon title="Categories" lesson="Lesson 14.2" /> },
+              { path: 'orders', element: <AdminComingSoon title="All orders" lesson="Lesson 14.3" /> },
+            ],
+          },
+        ],
       },
 
       { path: '*', Component: NotFoundPage }, // anything else

@@ -6930,3 +6930,110 @@ npm run build
 cd ..
 git add frontend
 git commit -m "My orders page with pagination and status badges; cancel pending orders with confirmation dialog"
+
+
+
+
+
+Phase 14, Lesson 14.1: Managing products in the shop's admin area
+
+Lesson 13.3 committed as db2db7c.
+
+(The npm error ... A complete log of this run... at the top of your output came from an npm command run in the project root. There's no package.json there, so npm walked up to the unrelated one in your user folder (Lesson 10.2) and failed. As soon as you ran it inside frontend\, it worked. No harm done.)
+
+What & why
+
+So far, staff manage products in the Django admin (Lesson 3.4). That works, but it's a developer tool: it looks different from the shop, and it's not something you'd give to a shop assistant. Real shops give staff their own screens inside the shop. The backend has supported everything for a long time (create, edit, image upload, hide, delete, admin-only permissions, Lessons 4.3–4.6). This lesson builds the screens:
+- a Store management area with tabs (Products, Categories, Orders)
+- a product table showing everything, including hidden products
+- a New product / Edit form, with picture upload
+- one-click Hide / Show and Delete (with a warning)
+
+What happens now
+
+Getting there: staff click Admin in the header and land on the Products tab. Customers who try /admin still see Staff only (Lesson 12.2), and even if they got past the screen, the API refuses every change with 403.
+
+The product table:
+- One row per product: small picture, name (a link to the shop page), category, price, stock (0 is shown in red), Visible / Hidden, and three buttons: ✏️ edit, 👁 hide/show, 🗑 delete.
+- Hidden products are included, shown greyed out. The API gives staff everything (Lesson 4.3), while customers never see them.
+- A search box and pages (12 per page, sorted by name), kept in the web address like everywhere else.
+
+Creating or editing a product (the same form for both):
+- The fields are name, web name (slug, which can be left empty so the server makes one from the name, Lesson 4.2), category (a dropdown filled from the categories list), price, stock, description, picture, and "Visible in the shop".
+- Choosing a picture shows a preview immediately, before anything is uploaded. On an existing product with a picture, a "Remove the current picture" tick box appears.
+- Saving:
+  a. The form sends everything together with the picture in one request, using the "parcel with compartments" format from Lesson 4.6 (multipart), the same thing you did with curl -F in PowerShell.
+  b. Removing a picture can't be expressed in that format, so it's a small second request that says "no picture".
+- The server's rules show up under the right fields:
+  - price below 0.01 → "Ensure this value is greater than or equal to 0.01."
+  - negative stock
+  - a name whose web name is already taken → 'A product with the slug "..." already exists.'
+  - a picture over 2 MB → "The image is 4.1 MB. The maximum is 2 MB."
+
+  These are the validation rules from Lessons 4.2 and 4.6, now visible to staff.
+- After saving, a message confirms it, the dialog closes, and every place that shows products is refreshed: the admin table, the shop's product list and product pages, and even carts (which show product details).
+
+Hide / Show: one click toggles "Visible in the shop". Hidden products disappear from the shop immediately (a direct link shows "Product not found"). They stay in carts, marked "This product is no longer available." (Lesson 6.3), and in past orders, unchanged. That's the soft delete from Lesson 3.3, and usually the right choice.
+
+Delete: first a warning dialog: "It disappears from the catalog and from every cart. Past orders keep their copy of the name and price. Hiding the product is usually the better choice." After confirming, the product is gone. As designed in Lessons 6.1 and 7.1, cart lines with it are removed, and orders keep their copy of the name and price.
+
+What I built
+
+- The Store management frame with its three tabs. Products works now; Categories and Orders are placeholders for Lessons 14.2 and 14.3.
+- The product table with search, pages, and the three row actions
+- The product form dialog, with picture preview, "remove picture", and error messages under each field
+- A reusable "Are you sure?" dialog, which we'll use again for categories and orders
+- The connections for saving (including the picture), hiding, and deleting, with "refresh everything that shows products" afterwards
+
+Tested: the TypeScript check, build, and lint pass. Through the backend, I confirmed that the form's way of sending data works (a form-style create gave 201, with the slug made from the name; an edit with price 0 and stock −1 gave both messages). All of it was undone afterwards.
+
+---
+
+▶️ Your turn
+
+Django, Docker, and npm run dev running. Sign in with your admin account and click Admin in the header.
+
+Step 1: The table
+
+You're on Store management → Products. You'll see all products, sorted by name, including "Discontinued Travel Mug", greyed out and marked Hidden. The Linen Cushion Cover has a red 0 in the Stock column. Try searching for mug.
+
+Step 2: Create a product with a picture
+
+1. Click New product. Fill in: name Ceramic Teapot, category Kitchen, price 27.50, stock 6, and a short description. Leave the web name empty.
+2. Click Choose file and pick any photo from your PC. The preview appears immediately.
+3. Click Create product. You get "Ceramic Teapot" was created., and the row appears, with the picture.
+4. Open the shop (Products), where the teapot is there. Its address is /products/ceramic-teapot (the web name was made from the name).
+
+Step 3: The server's rules, shown in the form
+
+Click New product again:
+- Name Ceramic Teapot (the same name), category Kitchen, price 0, stock -1. Click Create product. The browser may first object to the price and stock itself (they have minimum values). If you get past it, the server's messages appear under Price and Stock.
+- Fix the price and stock and submit again. Under Web name you now get 'A product with the slug "ceramic-teapot" already exists. ...' (the server checks the name only once the other fields are fine, as in Lesson 5.2).
+- Close the dialog with Cancel.
+
+Step 4: Edit, and a picture that's too big
+
+1. Click ✏️ on the Ceramic Teapot. The form is filled in. Change the price to 24.90 and save. The table and the shop show the new price.
+2. Click ✏️ again and choose big.png from %TEMP% (the 4 MB noise image from Lesson 4.6). Type %TEMP% in the file dialog's address bar to get there. If it's gone, recreate it with the command from Lesson 5.1, Step 9. Save. Under Picture you get "The image is 4.1 MB. The maximum is 2 MB."
+3. Instead, tick Remove the current picture and save. The row now shows the "no image" icon.
+
+Step 5: Hide and show
+1. Click ✏️ on the Ceramic Teapot. The form is filled in. Change the price to 24.90 and save. The table and the shop show the new price.
+2. Click ✏️ again and choose big.png from %TEMP% (the 4 MB noise image from Lesson 4.6). Type %TEMP% in the file dialog's address bar to get there. If it's gone, recreate it with the command from Lesson 5.1, Step 9. Save. Under Picture you get "The image is 4.1 MB. The maximum is 2 MB."
+3. Instead, tick Remove the current picture and save. The row now shows the "no image" icon.
+
+Step 5: Hide and show
+
+Click 👁 on the Ceramic Teapot. You get "...is now hidden from the shop.", and the row turns grey and Hidden. In the shop's product list it's gone, and /products/ceramic-teapot says Product not found. Click the eye again to show it.
+
+Step 6: Delete
+
+Add the teapot to Ana's cart (sign in as Ana in another browser, or do it first and switch accounts). Back as admin, click 🗑 on the teapot. Read the warning, then confirm. The product disappears from the table, the shop, and Ana's cart (Lesson 6.1's "remove it from every cart").
+
+Step 7: Build and commit
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\frontend"
+npm run build
+cd ..
+git add frontend
+git commit -m "Admin area: store management tabs, product table with search, create/edit form with image upload, hide/show and delete"
