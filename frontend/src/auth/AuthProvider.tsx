@@ -2,7 +2,10 @@ import { useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 
+import { toast } from 'sonner'
+
 import { fetchMe, obtainTokens, refreshAccessToken, registerAccount, type RegisterData } from '@/api/auth'
+import { setSessionExpiredHandler } from '@/lib/api'
 import { tokens } from '@/lib/tokens'
 import type { User } from '@/types/api'
 
@@ -63,8 +66,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryClient.clear() // forget everything loaded for this user (cart, orders, ...)
   }, [queryClient])
 
+  // If the session can't be renewed any more (refresh token expired), sign out and say so.
+  useEffect(() => {
+    setSessionExpiredHandler(() => {
+      logout()
+      toast.warning('Your session has expired. Please sign in again.')
+    })
+  }, [logout])
+
   const value = useMemo<AuthContextValue>(
-    () => ({ user, status, login, register, logout }),
+    () => ({ user, status, login, register, logout, updateUser: setUser }),
     [user, status, login, register, logout],
   )
 

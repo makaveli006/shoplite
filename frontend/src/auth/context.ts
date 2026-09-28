@@ -12,6 +12,8 @@ export interface AuthContextValue {
   login: (email: string, password: string) => Promise<User>
   register: (values: RegisterData) => Promise<User>
   logout: () => void
+  /** Replace the stored user after the profile was changed. */
+  updateUser: (user: User) => void
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null)

@@ -46,7 +46,17 @@ export function SiteHeader() {
 
           {user && (
             <>
-              <span className="px-2 text-sm text-muted-foreground">Hi, {displayName(user)}</span>
+              <NavLink to="/orders" className={navLinkClass}>
+                Orders
+              </NavLink>
+              {user.is_staff && (
+                <NavLink to="/admin" className={navLinkClass}>
+                  Admin
+                </NavLink>
+              )}
+              <NavLink to="/account" className={navLinkClass}>
+                Hi, {displayName(user)}
+              </NavLink>
               <Button variant="ghost" size="sm" onClick={signOut}>
                 <LogOut /> Sign out
               </Button>

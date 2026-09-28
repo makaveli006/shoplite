@@ -6518,3 +6518,125 @@ git commit -m "Frontend sign in / register / sign out: auth state, token storage
 Step 5: The open-redirect guard
 
 Sign out, then open http://localhost:5173/login?next=https://example.com and sign in as Carol. You land on the ShopLite home page, not on example.com. The foreign address was ignored.
+
+
+
+
+Understood. No more Playwright. I've stopped my temporary servers and saved that preference for future sessions. Here's the lesson.
+
+Phase 12, Lesson 12.2: Staying signed in and protecting pages
+
+Lesson 12.1 committed as 5a5c30f. (The dependency optimized: sonner / next-themes ... reloading lines were Vite preparing the new pop-up library the first time it was used. That's a one-time thing.)
+
+What & why
+
+Two gaps remain from the last lesson:
+1. The 15-minute problem. The access token expires after 15 minutes. After that, every request that needs login (cart, orders, account) would fail with 401, even though the customer is still "signed in" with a valid 7-day refresh token. The customer shouldn't notice any of this.
+2. Pages for the right people. Cart, orders, and account only make sense for a signed-in customer. The admin area is for staff. Visitors who open these addresses (from a bookmark, or by typing them) need to be guided sensibly, not shown a broken page.
+
+What happens now
+
+When the access token expires in the middle of shopping:
+1. A request fails with 401 because the 15-minute token is too old.
+2. The shop catches that failure before the page sees it, and sends the refresh token to the API to get a new access token.
+3. It repeats the original request with the new token. It succeeds, and the page gets its answer as if nothing had happened.
+4. If several requests fail at the same moment (for example, the cart and the order list loading together), they all wait for one single renewal instead of each starting its own.
+5. Each request is repeated at most once, so a genuine "you're not allowed" can't cause an endless loop.
+6. If the refresh token itself is no longer accepted (after 7 days, or if it's been tampered with), the session is really over: the shop signs the customer out, shows "Your session has expired. Please sign in again.", and a protected page sends them to Sign in (and back afterwards).
+7. If the server is simply unreachable, nobody is signed out. That's just a network problem, handled like the other connection errors.
+
+This is exactly the 401 → refresh → retry idea from Lesson 5.1, now automatic. It's also why the API had to answer 401 for "not authenticated" and 403 for "not allowed": only 401 triggers a renewal.
+
+Signed-in-only pages (/cart, /orders, /account):
+- A visitor who opens one is sent to Sign in, with the page remembered: /login?next=%2Faccount. After signing in, they land back on that page.
+- While the shop is still checking a saved login (right after opening the page), a grey placeholder is shown briefly, so signed-in customers aren't wrongly sent to Sign in during that split second.
+
+Admin-only pages (/admin, which the admin screens will fill in Phase 14):
+- Visitors are sent to Sign in.
+- Signed-in customers who aren't staff see "Staff only — This part of the shop is only for administrators."
+- Staff see the (placeholder) store management page.
+- This is only for tidiness. The real protection is in the API (Lessons 4.3, 7.4): even if someone got past the screen, every admin request is refused with 403. The golden rule from Lesson 0.1 again: the frontend is for convenience, the backend enforces the rules.
+
+The header now shows, for signed-in customers: Orders, Admin (staff only), Hi, Ana (a link to the account page), and Sign out.
+
+The account page (/account) shows the email, "member since", and an Administrator badge for staff. It lets customers change their first name, last name, and username. Saving sends only those fields to the API, and the header greeting updates immediately (for example, Hi, Anna). The server's messages appear under the right field (for example, "A user with that username already exists."). The email isn't editable here. It's the login identity, and the API refuses to change it (Lesson 5.2).
+
+What I built
+
+- Automatic renewal of the access token, including the "one renewal for many requests" and "repeat only once" rules, in the shared API connection
+- Signing out when the session truly expires, with the warning message
+- Two page guards: "signed-in only" and "staff only"
+- The account page (a new form, reusing the error-message boxes from Lesson 12.1)
+- Placeholder pages for My orders (Phase 13) and Store management (Phase 14)
+- The new header links
+- The cart page is now signed-in only
+
+What I tested: the build passes. Before you asked me to stop using the browser automation, I had already confirmed in a real browser that:
+- /account sent a visitor to /login?next=%2Faccount, and signing in returned there
+- /admin showed Staff only for Ana
+- with 1-minute tokens, after the token expired, saving the account caused exactly me 401 → refresh 200 → me 200 and Your details were saved.
+
+Not tested by me: the "session expired" message (Step 6 below). Please check that one.
+
+---
+
+▶️ Your turn
+
+Django running normally in Window 1; in the frontend window:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\frontend"
+npm run dev
+
+Step 1: Signed-in-only pages
+
+Make sure you're signed out, then type http://localhost:5173/account in the address bar.
+- You're on Sign in, and the address is /login?next=%2Faccount.
+- Sign in as Ana, and you land on My account.
+
+Sign out and try http://localhost:5173/cart and /orders: the same behaviour.
+
+Step 2: The account page
+
+Signed in as Ana:
+1. Change First name to Anna and click Save changes. You get "Your details were saved.", and the header says Hi, Anna straight away. Change it back to Ana.
+2. Change Username to bob and save. Under Username you get "A user with that username already exists." Put back ana.
+
+Step 3: Staff-only pages
+
+- As Ana, open http://localhost:5173/admin. You get Staff only, and there's no Admin link in her header.
+- Sign out, then sign in with your admin account. The header now has Admin. Click it to see the Store management placeholder. My account shows the Administrator badge.
+
+Step 4: Automatic renewal (with 1-minute tokens)
+
+In Window 1, restart Django with short-lived tokens (a real setting in the window beats .env, Lesson 2.3):
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+$env:JWT_ACCESS_MINUTES = "1"
+uv run python manage.py runserver
+In the browser:
+1. Sign out and sign in again as Ana, so you get a token that only lasts 1 minute, and open My account via the header link.
+2. Press F12 → Network → Fetch/XHR, and clear the list.
+3. Wait at least 2 minutes without reloading the page.
+4. Click Save changes. In the Network list you'll see me/ 401 (red), then refresh/ 200, then me/ 200, and the page just says "Your details were saved." The customer never noticed the expired token.
+
+Step 5 is intentionally skipped
+
+(Nothing to do here: the old Step 5 was merged into Step 4.)
+
+Step 6: A truly expired session
+
+Still with 1-minute tokens, on My account:
+1. F12 → Application → Local storage → http://localhost:5173 → double-click the value of shoplite.refresh and replace it with broken. This simulates a refresh token that's no longer valid.
+2. Wait at least 2 minutes (so the access token in memory has also expired).
+3. Click Save changes. Expected: the yellow message "Your session has expired. Please sign in again.", the header switches to Sign in, and you're taken to the Sign in page with ?next=%2Faccount.
+
+Please tell me what you see here, since this is the one path I couldn't finish testing.
+
+2. Wait at least 2 minutes (so the access token in memory has also expired).
+3. Click Save changes. Expected: the yellow message "Your session has expired. Please sign in again.", the header switches to Sign in, and you're taken to the Sign in page with ?next=%2Faccount.
+
+Please tell me what you see here, since this is the one path I couldn't finish testing.
+
+Step 7: Back to normal
+
+In Window 1: Ctrl+C, then:
+Remove-Item Env:JWT_ACCESS_MINUTES
+uv run python manage.py runserver

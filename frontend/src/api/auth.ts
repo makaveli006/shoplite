@@ -27,3 +27,14 @@ export async function fetchMe(): Promise<User> {
 export async function registerAccount(values: RegisterData): Promise<void> {
   await api.post('/auth/register/', values)
 }
+
+export interface ProfileData {
+  first_name: string
+  last_name: string
+  username: string
+}
+
+export async function updateMe(values: ProfileData): Promise<User> {
+  const { data } = await api.patch<User>('/auth/me/', values)
+  return data
+}

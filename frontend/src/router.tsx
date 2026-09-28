@@ -1,10 +1,14 @@
 import { createBrowserRouter } from 'react-router'
 
+import { RequireAdmin, RequireAuth } from '@/components/auth/RouteGuards'
 import { RootLayout } from '@/components/layout/RootLayout'
+import { AccountPage } from '@/pages/AccountPage'
+import { AdminHomePage } from '@/pages/admin/AdminHomePage'
 import { CartPage } from '@/pages/CartPage'
 import { HomePage } from '@/pages/HomePage'
 import { LoginPage } from '@/pages/LoginPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
+import { OrdersPage } from '@/pages/OrdersPage'
 import { ProductDetailPage } from '@/pages/ProductDetailPage'
 import { ProductsPage } from '@/pages/ProductsPage'
 import { RegisterPage } from '@/pages/RegisterPage'
@@ -16,12 +20,30 @@ export const router = createBrowserRouter([
     path: '/',
     Component: RootLayout,
     children: [
+      // Open to everyone
       { index: true, Component: HomePage }, // exactly "/"
       { path: 'products', Component: ProductsPage },
       { path: 'products/:slug', Component: ProductDetailPage }, // ":slug" = any product's web name
-      { path: 'cart', Component: CartPage },
       { path: 'login', Component: LoginPage },
       { path: 'register', Component: RegisterPage },
+
+      // Signed-in customers only
+      {
+        Component: RequireAuth,
+        children: [
+          { path: 'cart', Component: CartPage },
+          { path: 'orders', Component: OrdersPage },
+          { path: 'account', Component: AccountPage },
+        ],
+      },
+
+      // Staff only
+      {
+        path: 'admin',
+        Component: RequireAdmin,
+        children: [{ index: true, Component: AdminHomePage }],
+      },
+
       { path: '*', Component: NotFoundPage }, // anything else
     ],
   },
