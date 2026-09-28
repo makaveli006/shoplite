@@ -6323,3 +6323,81 @@ Start Django again (uv run python manage.py runserver) and click Try again. The 
 ├─────────────────────────────────────────┼───────────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
 │ Error overlay: Failed to resolve import │ Step 1 wasn't done                                            │ Run it in frontend\                      │
 │  "@tanstack/react-query"                │
+
+
+
+Phase 11, Lesson 11.3: The product detail page
+
+Lesson 11.2 committed as a41bf1c, and frontend/.env correctly stayed out of Git. (Your first git commit said "no changes added to commit" because the files hadn't been added with git add yet. You spotted it and fixed it right away.)
+
+What & why
+
+Clicking a product card opens /products/chef-knife, but the page is still a placeholder. A real product page needs everything a customer looks at before buying: a big picture, the price, whether it's in stock, the description, how many to buy, and a button to buy it. It also has to cope with bad addresses: an old bookmark to a product that was removed, or a typo.
+
+What happens now
+
+- Open a product and the page asks the API for that one product (the web name at the end of the address), then shows:
+  - a breadcrumb at the top: Products › Kitchen › Chef Knife. Clicking Kitchen opens the product list already filtered to that category, reusing the filters from Lesson 11.2.
+  - a large picture (or a "no image" icon), the category, the name, and the price in your currency
+  - a stock label: In stock, Only 3 left (when 5 or fewer are left, to encourage buying), or Out of stock
+  - the description
+  - a quantity picker (− 1 +). It can't go below 1 or above the number in stock, so a customer can't choose 8 knives when only 5 exist. The API checks this again when adding to the cart (Lesson 6.3), because the frontend is only a convenience and the backend is the real guard (the golden rule from
+    Lesson 0.1).
+  - the buy button. Adding to a cart needs a logged-in customer (Lesson 6.1), and login arrives in Phase 12. So for now the button says "Sign in to add to
+    cart" and takes you to the sign-in page, remembering which address (/login?next=/products/chef-knife). After we buildlogin, the shop will bring the customer back to this product once they've signed in.
+- Out-of-stock products show the label and a short message instead of the picker and button.
+- The browser tab shows the product's name, for example Chef Knife | ShopLite, which is useful with many tabs open and for bookmarks. The product list tab says Products | ShopLite.
+- Unknown or hidden products show "Product not found", "It may have been removed, or the link is wrong", and a button back to all products. This happens
+  because the API answers "404 not found" for both (hidden onethe page recognises that answer. A real connection problemshows "Couldn't load this product" with Try again instead, so customers can tell "it doesn't exist" apart from "something is broken".
+- While loading, grey shapes appear in the layout of the real page.
+- Faster opening: loading starts when you point at a card. On the mouse moves over a card (or the keyboard reaches it), theshop starts fetching that product's details in the background. By the time you click, usually a fraction of a second later, the data is often already
+  there, so the page appears instantly without grey shapes. Itas everything else (Lesson 11.2), so returning to a productyou've already opened is instant too.
+
+What I built
+
+- The full product page, including its loading, "not found", and "couldn't load" versions
+- A reusable quantity picker, which we'll use again in the cart (Phase 13)
+- "Start loading on hover" for product cards
+- Tab titles for the product list and product pages
+
+No new packages this time.
+
+---
+
+▶️ Your turn
+
+Make sure Django is running in Window 1, then in the frontend window:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\frontend"
+npm run dev
+
+Step 1: A product page
+
+Open http://localhost:5173/products and click the Chef Knife:
+- Check the breadcrumb, the picture, $49.99 (or your currency), and Only 5 left (or however many your earlier tests left in stock).
+- The browser tab says Chef Knife | ShopLite.
+- Click + until it stops. It stops at the stock number, and +  to 1, where − turns grey.
+- Click Kitchen in the breadcrumb. You're on the product list, filtered to Kitchen.
+
+Step 2: Loading on hover
+
+Press F12 → Network → Fetch/XHR, and clear the list with the 🚫 icon. On the product list, slowly move the mouse over a card you haven't opened yet (for example Bluetooth Speaker) without clicking. A request for /api/products/bluetooth-speaker/ appears before you click. Now click it: the page opens instantly, with no grey shapes.
+
+Step 3: Out of stock, and not found
+
+- Open Linen Cushion Cover (search for "linen"). You see an Out of stock label and the message, with no picker or button.
+- Type http://localhost:5173/products/discontinued-travel-mug in the address bar. You get Product not found (the product is hidden), and the tab says Product not found | ShopLite.
+- Try http://localhost:5173/products/no-such-thing: the same message.
+
+In the Console tab you'll see a red line: "Failed to load resource: the server responded with a status of 404". That's just the browser reporting the API's "not found" answer. It's expected here, and the page handles it properly.
+
+Step 4: The sign-in button
+
+Open any in-stock product and click Sign in to add to cart. You're on the Sign in placeholder, and the address is /login?next=%2Fproducts%2F.... That's the "come back here afterwards" note, with the slashes written in address-safe form (%2F).
+
+Step 5: Build and commit
+
+Stop the dev server, then:
+npm run build
+cd ..
+git add frontend
+git commit -m "Product detail page: breadcrumb, stock, quantity picker, not-found handling, prefetch on hover, tab titles"

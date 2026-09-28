@@ -4,12 +4,21 @@ import { Link } from 'react-router'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { usePrefetchProduct } from '@/hooks/useCatalog'
 import { formatPrice } from '@/lib/format'
 import type { Product } from '@/types/api'
 
 export function ProductCard({ product }: { product: Product }) {
+  const prefetch = usePrefetchProduct()
+
   return (
-    <Link to={`/products/${product.slug}`} className="group rounded-xl focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none">
+    <Link
+      to={`/products/${product.slug}`}
+      // Start loading the product page as soon as the mouse (or keyboard focus) arrives on the card.
+      onMouseEnter={() => prefetch(product.slug)}
+      onFocus={() => prefetch(product.slug)}
+      className="group rounded-xl focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+    >
       <Card className="h-full pt-0 transition-shadow group-hover:shadow-md">
         <div className="relative aspect-square bg-muted">
           {product.image ? (

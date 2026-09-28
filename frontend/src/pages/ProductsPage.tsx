@@ -53,6 +53,7 @@ export function ProductsPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      <title>Products | ShopLite</title>
       <div className="flex items-baseline justify-between">
         <h1 className="text-3xl font-bold tracking-tight">Products</h1>
         {products.data && (
