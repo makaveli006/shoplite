@@ -60,12 +60,17 @@ INSTALLED_APPS = [
     # Third-party apps
     'rest_framework',
     'django_filters',
+    'corsheaders',
     # Our apps
     'accounts',
     'catalog',
 ]
 
 MIDDLEWARE = [
+    # Must be as high as possible, and before CommonMiddleware, so CORS headers are
+    # added to every response (including errors and redirects) and preflight
+    # OPTIONS requests are answered early.
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -145,6 +150,10 @@ REST_FRAMEWORK = {
         'core.filters.StableOrderingFilter',
     ],
 }
+
+# CORS (django-cors-headers): which OTHER websites' JavaScript may call this API.
+# The React dev server runs on http://localhost:5173. Comma-separated in .env.
+CORS_ALLOWED_ORIGINS = env_list('CORS_ALLOWED_ORIGINS')
 
 # JSON Web Tokens (djangorestframework-simplejwt)
 SIMPLE_JWT = {

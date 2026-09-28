@@ -4427,3 +4427,120 @@ Stop the server, then:
 │                                          │ response at all)
 1. the four lines from Step 2,
 2. the psql output from Step 3, and
+
+
+
+
+What & why
+
+Everything so far was tested from PowerShell, and it all works. But in Phase 10 the shop's pages will be a React app running in the browser at http://localhost:5173, calling our API at http://127.0.0.1:8000. Browsers have a security rule that blocks this by default, even though the API itself is fine. In this lesson you'll see the block happen, understand why, and then allow our frontend (and only our frontend) through.
+
+What CORS is, in plain language
+
+A website's origin is the combination of three things: http or https, the host name, and the port. So http://localhost:5173 and http://127.0.0.1:8000 are different origins. Even localhost and 127.0.0.1 count as different, because the host name is written differently.
+
+Browsers follow the same-origin policy: JavaScript on a page may send requests to other origins, but it isn't allowed to read the answer unless that other server explicitly says "this origin is allowed." The server says so by adding a response header: Access-Control-Allow-Origin: http://localhost:5173. This mechanism for granting permission is called CORS (Cross-Origin Resource Sharing).
+
+The rule exists to protect users. Without it, any website you visit could quietly use JavaScript to read data from other sites where you're logged in, like your email or bank.
+
+The key point that confuses everyone the first time: when CORS blocks a request, the server usually still received it and answered normally. You'll see 200 in the Django log. It's the browser that throws the answer away, because the permission header was missing. That's also why PowerShell never had this problem: PowerShell isn't a browser and doesn't enforce the rule.
+
+For some requests the browser is extra careful and first sends a "preflight" request. That's an OPTIONS request asking the server "would you accept a GET with an Authorization header from localhost:5173?" Only if the server says yes does the browser send the real request. Requests with our token header, or with a JSON body, always trigger a preflight. Simple public GETs don't.
+
+What I changed
+
+- Added django-cors-headers (you'll install it with uv; the resolver picks 4.9.0 for Django 5.1.7). It's a small, widely used package that adds the permission headers and answers preflight requests.
+- Put its middleware at the very top of MIDDLEWARE. Remember from Lesson 2.2 that every request passes through the middleware list from top to bottom, and every response goes back through it bottom to top. Placing CORS first means it can answer preflight requests immediately, and it adds its headers to every response, including errors like 401 or 404. Without that, a failed login could show up in React as a confusing "CORS error" instead of the real 401.
+- Made the allowed origins a setting read from .env (CORS_ALLOWED_ORIGINS), the same way we handled secrets and the database in Lessons 2.3 and 2.4. Only the origins listed there get permission. Every other website's JavaScript stays blocked.
+- Left that .env value empty on purpose, so you first see the browser block the request. You'll fill it in yourself halfway through the lesson.
+- Created a tiny test page at %TEMP%\cors-test\index.html, outside the project. It stands in for the future React app. It has two buttons: one loads products (a simple public request), and one logs in and calls /api/auth/me/ with a token (which triggers a preflight). We'll serve it on port 5173, exactly where React will run.
+
+One thing we deliberately don't need: allowing browser cookies across origins. Our React app will send the JWT in the Authorization header (Lesson 5.1), not in a cookie, so the simpler default is also the safer one.
+
+I verified the configuration in both states:
+
+┌──────────┬───────────────────────────────────────────────────────┬──────────────────────────────┬──────────────────────────────────────────────────┐
+│ Setting  │              Request from localhost:5173              │  Request from evil.example   │           Preflight for /api/auth/me/            │
+├──────────┼───────────────────────────────────────────────────────┼──────────────────────────────┼──────────────────────────────────────────────────┤
+│ Empty    │ 200, no permission header (browser will block)        │ 200, no header               │ no permission headers                            │
+├──────────┼───────────────────────────────────────────────────────┼──────────────────────────────┼──────────────────────────────────────────────────┤
+│ Filled   │ 200, Access-Control-Allow-Origin:                     │ 200, no header (still        │ allows authorization, content-type, and the      │
+│ in       │ http://localhost:5173                                 │ blocked)                     │ methods                                          │
+└──────────┴───────────────────────────────────────────────────────┴──────────────────────────────┴──────────────────────────────────────────────────┘
+
+---
+
+▶️ Your turn
+
+You'll need three PowerShell windows this time: the API, the test page, and one for commands.
+
+Step 1: Install the package (Window 1)
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv add django-cors-headers
+uv run python manage.py check
+uv run python manage.py runserver
+Expect + django-cors-headers==4.9.0, then no issues.
+
+Step 2: Serve the test page on port 5173 (Window 2)
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv run python -m http.server 5173 --directory "$env:TEMP\cors-test"
+Python has a very basic web server built in. This serves the test page's folder, which gives us a page with a different origin from the API.
+
+Step 3: See CORS block the request
+
+1. In your browser, open http://localhost:5173 and press F12 to open DevTools. Keep the Console and Network tabs handy.
+2. Click button 1. The page says "Request failed: TypeError: Failed to fetch". That's all JavaScript is told.
+3. The Console shows the real reason, in red:
+▎ Access to fetch at 'http://127.0.0.1:8000/api/products/?page_size=3' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+4. Now look at Window 1 (Django's log): "GET /api/products/?page_size=3 HTTP/1.1" 200. The server answered successfully. The browser blocked it. This is the most important thing to remember about CORS.
+5. Type Ana's password (Sunny-Garden-42) and click button 2. It also fails. In the Django log you'll see "OPTIONS /api/auth/token/ HTTP/1.1" 200. That's the preflight: the browser asked first, got no permission, and never sent the actual login request.
+
+Step 4: Allow our frontend's origin
+
+Open backend\.env and fill in the empty line:
+CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+Then restart the API in Window 1 (Ctrl+C, then uv run python manage.py runserver again). The auto-reloader only watches .py files, and .env is read once at startup, so changes there need a manual restart. We list both localhost and 127.0.0.1 because the browser treats them as different origins.
+
+Step 5: Try again
+
+1. Refresh http://localhost:5173 and click button 1 → Status 200 and three products.
+2. Click button 2 (with the password filled in) → Login 200, me 200, plus Ana's profile as JSON.
+3. In the Network tab, click the me/ request that has type preflight (or method OPTIONS). Under Response Headers you'll find access-control-allow-origin: http://localhost:5173 and access-control-allow-headers: ... authorization .... Then click the real GET me/ request: it has the same access-control-allow-origin header, plus your authorization: Bearer ... request header.
+4. In the Django log you'll now see pairs: OPTIONS /api/auth/me/ followed by GET /api/auth/me/.
+
+Step 6: Confirm that other websites stay blocked (Window 3)
+
+$api = "http://127.0.0.1:8000/api"
+curl.exe -sS -D - -o NUL -H "Origin: http://localhost:5173" "$api/products/?page_size=1" | Select-String "HTTP/|access-control"
+curl.exe -sS -D - -o NUL -H "Origin: http://evil.example" "$api/products/?page_size=1" | Select-String "HTTP/|access-control"
+Here curl pretends to be a page from each origin. -D - prints the response headers, and -o NUL throws away the body.
+- From localhost:5173: 200 OK and access-control-allow-origin: http://localhost:5173
+- From evil.example: 200 OK and no access-control header, so a real browser on that site would block the answer
+
+Stop the test page server (Window 2) with Ctrl+C. The API can keep running.
+
+Step 7: Commit
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+git status
+git add backend
+git commit -m "CORS with django-cors-headers; allowed origins from .env"
+The test page lives in %TEMP%, so it isn't part of the project. .env is ignored as always, and .env.example now shows the value React will need.
+
+---
+
+❓ If something goes wrong
+
+┌───────────────────────────────────────────────┬──────────────────────────────────────────────────┬──────────────────────────────────────────────────┐
+Step 6: Confirm that other websites stay blocked (Window 3)
+
+$api = "http://127.0.0.1:8000/api"
+curl.exe -sS -D - -o NUL -H "Origin: http://localhost:5173" "$api/products/?page_size=1" | Select-String "HTTP/|access-control"
+curl.exe -sS -D - -o NUL -H "Origin: http://evil.example" "$api/products/?page_size=1" | Select-String "HTTP/|access-control"
+Here curl pretends to be a page from each origin. -D - prints the response headers, and -o NUL throws away the body.
+- From localhost:5173: 200 OK and access-control-allow-origin: http://localhost:5173
+- From evil.example: 200 OK and no access-control header, so a real browser on that site would block the answer
+
+Stop the test page server (Window 2) with Ctrl+C. The API can keep running.
