@@ -113,12 +113,14 @@ class StartPaymentTests(PaymentTestCase):
 
     @override_settings(PAYMENTS_ENABLED=False)
     def test_without_keys_online_payment_is_switched_off(self):
-        response, create = self.start()
+        with self.assertLogs('django.request', 'ERROR'):  # a 5xx answer is logged as an error
+            response, create = self.start()
         self.assertEqual(response.status_code, 503)
         create.assert_not_called()
 
     def test_razorpay_unreachable(self):
-        response, _ = self.start(side_effect=PaymentGatewayError('connection refused'))
+        with self.assertLogs('django.request', 'ERROR'):  # a 5xx answer is logged as an error
+            response, _ = self.start(side_effect=PaymentGatewayError('connection refused'))
         self.assertEqual(response.status_code, 502)
         self.assertFalse(Payment.objects.exists())
 

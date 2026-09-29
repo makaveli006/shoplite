@@ -9597,3 +9597,550 @@ gh pr create --draft --base main --title "Better search: PostgreSQL full-text se
 CI runs on the draft PR. The CI database is also allowed to install pg_trgm, so it should pass. When you're happy with it, merge and delete the branch yourself with option A or B, using this PR's number instead of 1.
 
 ✻ Brewed for 11m 44s · done 7:36 PM
+
+
+
+
+
+I have an AWS account available, but the root user is my CEO. I need to use this AWS account for a one-time deployment so I can learn how to properly deploy an application using Continuous Integration and Continuous Deployment (CI/CD), security best practices, and the kind of deployment workflow that real software engineering teams use in production.
+
+I am also preparing for interviews, and many interviewers ask whether I have experience with Amazon Web Services (AWS) and whether I know how to deploy applications. So, I want to treat this entire deployment as both a practical production deployment exercise and an interview preparation learning path.
+
+After deployment, I will only use the application for around 1–2 hours for testing and learning. After that, I want to disable, stop, or completely dismantle the AWS resources so that there are no unnecessary charges on my CEO's AWS account.
+
+Cost control is extremely important. I do not want any hidden resources or services continuing to generate charges after testing. Therefore, during every AWS step, explain the approximate cost involved in Indian Rupees (INR). For calculation purposes, use the exchange rate:
+
+**1 USD = ₹95.90**
+
+For every AWS resource we create, clearly explain:
+
+- Why we are creating it.
+- How it fits into the overall architecture.
+- What security benefit or operational advantage it provides.
+- Whether it has any cost.
+- The approximate cost in USD and INR.
+- Whether the resource continues charging when it is stopped.
+- How to safely disable or delete it after testing.
+- Whether deleting it could affect any other resources.
+
+I already have an AWS Access Key ID and Secret Access Key that I use for another application. I do not want to reuse those credentials for this deployment.
+
+Instead, I want to create separate credentials specifically for this project. After testing is complete, we should delete or revoke those credentials for security.
+
+I want the deployment plan to be robust, sensible, secure, and similar to how a professional software engineering team would approach a production deployment.
+
+For the first deployment, I want to configure everything manually through the AWS Management Console user interface (UI). I want to understand every component before automating it.
+
+After completing the manual deployment and understanding the architecture, the final phase will be to recreate the infrastructure using Terraform so that the infrastructure can be defined as code, version-controlled, reviewed, and reproduced.
+
+The overall learning path should therefore be:
+
+1. Understand the application and deployment requirements.
+2. Design a sensible AWS production-style architecture.
+3. Create project-specific AWS credentials and permissions.
+4. Configure the required networking and security.
+5. Deploy the application manually using the AWS Management Console.
+6. Configure Continuous Integration and Continuous Deployment (CI/CD).
+7. Configure HTTPS, Transport Layer Security (TLS), domain routing, logging, monitoring, and other relevant production concerns.
+8. Test the deployed application for approximately 1–2 hours.
+9. Verify the complete deployment and understand how every component works.
+10. Create detailed interview documentation for the manual deployment.
+11. Safely dismantle or disable unnecessary resources and verify that nothing continues generating unexpected charges.
+12. Recreate the same infrastructure using Terraform.
+13. Create separate Terraform interview documentation.
+14. After Terraform testing, destroy the Terraform-managed infrastructure and verify again that no billable resources remain.
+
+## Interview Documentation Requirement
+
+Because this deployment is also for interview preparation, I want detailed documentation explaining everything we did.
+
+Before starting the Terraform phase, create a file named:
+
+**`INTERVIEW-DEPLOYMENT.md`**
+
+This file should cover only the infrastructure and deployment that we configured manually through the AWS Management Console.
+
+It should explain, step by step:
+
+- What we configured.
+- Why we configured it.
+- Which AWS service was used.
+- What problem that service solves.
+- How the components communicate with each other.
+- Security considerations.
+- Networking concepts involved.
+- Continuous Integration and Continuous Deployment (CI/CD) workflow.
+- Deployment architecture.
+- Cost considerations.
+- Advantages and disadvantages of the chosen architecture.
+- Alternative approaches that could have been used.
+- Important AWS concepts that an interviewer may ask about.
+- Common interview questions related to the architecture.
+- How I can explain this deployment clearly during an interview.
+
+This documentation must be completed **before we start the Terraform phase**.
+
+## Terraform Phase
+
+After the manual deployment and `INTERVIEW-DEPLOYMENT.md` are completed, we will recreate the infrastructure using Terraform.
+
+The Terraform configuration should follow good Infrastructure as Code (IaC) practices and should be suitable for version control.
+
+For the Terraform deployment, create another documentation file named:
+
+**`INTERVIEW-TERRAFORM.md`**
+
+This document should explain:
+
+- The Terraform project structure.
+- Provider configuration.
+- Resources created.
+- Variables.
+- Outputs.
+- State management.
+- Dependency handling.
+- Security considerations.
+- How Terraform maps to the AWS resources we previously created manually.
+- How `terraform init`, `terraform plan`, `terraform apply`, and `terraform destroy` work.
+- Why Infrastructure as Code (IaC) is useful.
+- Advantages of Terraform compared with configuring infrastructure manually.
+- Terraform best practices.
+- Important Terraform interview questions.
+- How to explain the Terraform deployment during an interview.
+
+Both `INTERVIEW-DEPLOYMENT.md` and `INTERVIEW-TERRAFORM.md` are primarily intended for interview preparation, so they should be detailed enough that I can revise them later and confidently explain the entire deployment architecture and process.
+
+For now, let's first create a robust and sensible deployment plan. After that, we will perform the deployment step by step through the AWS Management Console user interface.
+
+
+
+
+
+er approved Claude's plan
+Plan saved to: ~\.claude\plans\pasted-content-id-0268-i-am-synchronous-cosmos.md · /plan to edit
+ShopLite on AWS: production-style deployment plan (console first, Terraform later)
+
+Context
+
+The user wants to learn a real, team-grade AWS deployment with CI/CD, security and cost control, for interviews. It uses their company's AWS account; the CEO owns the root user.
+
+- Timing: the app runs for about 1–2 hours of testing, then everything is torn down with a verified zero-leftover check.
+- Order: the whole thing is done by hand in the AWS Console first (no AWS CLI unless unavoidable), documented in INTERVIEW-DEPLOYMENT.md, then rebuilt with Terraform, documented in INTERVIEW-TERRAFORM.md, and destroyed again.
+- Cost reporting: every resource gets its cost in USD and INR (1 USD = ₹95.90), whether it keeps charging when stopped, how to delete it, and what the deletion affects.
+- Credentials: new, project-only credentials, removed at the end. The other application's access keys are never used.
+
+The user's choices:
+- Access: their own IAM user with admin rights (not root).
+- HTTPS: the free CloudFront address (https://dxxxx.cloudfront.net), with no domain purchase.
+- Data: RDS PostgreSQL plus ElastiCache Redis.
+- Region: us-east-1 (N. Virginia).
+
+What the code needs for the cloud:
+- Web server: backend/Dockerfile only starts Celery; there's no Gunicorn web server.
+- Admin files: nothing serves the admin's static files (STATIC_ROOT exists, but there's no WhiteNoise or S3).
+- Uploads: they go to the local disk (MEDIA_ROOT), and containers lose their disk when replaced.
+- Email pictures: core/emails.product_thumbnail opens product.image.path, which doesn't exist with S3 storage.
+- HTTPS detection: the production settings block reads X-Forwarded-Proto, but behind CloudFront → ALB (over HTTP) that header says http.
+- Hosts: load balancer health checks arrive with the container's IP address as the host, which Django rejects.
+- Git: all of these changes go on a new branch feature/aws-deploy with a draft PR. The user merges it themselves. No Claude attribution.
+
+0. Ground rules for cost and safety (before any resource)
+
+- Approval: get the CEO's OK for a small spend (suggested cap $10 ≈ ₹959) and ask them to allow IAM access to Billing (Account → "IAM user and role access to Billing information", root only), so Budgets and Cost Explorer are visible.
+- AWS Budgets: a monthly cost budget of $10 with email alerts at 50%, 80% and 100% (actual) and 100% (forecast). Free.
+- Tag everything with Project = shoplite-demo and Owner = <name>, and turn it on as a cost allocation tag. Tag Editor then lists every leftover resource in every region.
+- Timing: create the expensive resources (NAT, ALB, RDS, ElastiCache, Fargate) on the same day as testing, and delete them the same day.
+
+1. Architecture (us-east-1)
+
+Browser ──HTTPS──> CloudFront (dxxxx.cloudfront.net, AWS certificate, free tier)
+                    ├─ /*            → S3 "frontend" bucket (React build; private, Origin Access Control)
+                    ├─ /media/*      → S3 "media" bucket (product images; private, OAC)
+                    └─ /api/*, /admin/*, /static/*  → ALB (HTTP, only CloudFront may connect: prefix list + secret header)
+ALB (public subnets, 2 AZs) → ECS Fargate "web" service (Gunicorn + Django + WhiteNoise, private subnets)
+ECS Fargate "worker" service (Celery, private subnets)
+RDS PostgreSQL db.t4g.micro (private subnets, single-AZ) · ElastiCache Redis cache.t4g.micro (private subnets)
+Private subnets reach the internet (ECR pulls, Gmail SMTP, Razorpay) through 1 NAT Gateway
+Secrets: SSM Parameter Store SecureString → injected into containers · Logs: CloudWatch Logs
+CI/CD: GitHub Actions → (OIDC, no stored AWS keys) → ECR images, migrations task, ECS deploy, S3 upload, CloudFront invalidation
+
+Why this shape:
+- One HTTPS address for everything: CloudFront serves both the React app and the API, so there's no CORS and no domain purchase.
+- Nothing reachable directly: the database, cache and app containers have no public address.
+- The load balancer only accepts CloudFront.
+- No AWS keys to leak: the deploy pipeline uses short-lived OIDC tokens instead of stored keys.
+
+The interview docs cover the alternatives: App Runner, Elastic Beanstalk, a single EC2 instance with Docker Compose, EKS, and a NAT-free design.
+
+2. Resources and approximate cost (us-east-1, on-demand)
+
+Each price is re-checked on the console or pricing page when that resource is created.
+
+┌──────────────────────────┬─────────────────────────┬──────────────────────┬───────────┬──────────────────────────┬─────────────────────────────────┐
+│         Resource         │           Why           │      ≈ USD/hour      │    ≈      │ Charges when "stopped"?  │          Delete notes           │
+│                          │                         │                      │ INR/hour  │                          │                                 │
+├──────────────────────────┼─────────────────────────┼──────────────────────┼───────────┼──────────────────────────┼─────────────────────────────────┤
+│ VPC, subnets, route      │                         │                      │           │                          │ delete last (everything depends │
+│ tables, IGW, security    │ the private network     │ 0                    │ 0         │ —                        │  on it)                         │
+│ groups                   │                         │                      │           │                          │                                 │
+├──────────────────────────┼─────────────────────────┼──────────────────────┼───────────┼──────────────────────────┼─────────────────────────────────┤
+│                          │                         │                      │           │ can't be stopped;        │                                 │
+│ NAT Gateway (1 AZ) +     │ lets private containers │ 0.045 + 0.005        │ ₹4.80     │ charges until deleted    │ delete, then release the        │
+│ Elastic IP               │  reach the internet     │                      │           │ (~$37/month if           │ Elastic IP                      │
+│                          │                         │                      │           │ forgotten)               │                                 │
+├──────────────────────────┼─────────────────────────┼──────────────────────┼───────────┼──────────────────────────┼─────────────────────────────────┤
+│ ALB (+ its 2 public IPv4 │ spreads traffic over    │ ~0.0225 + LCU ~0.008 │           │                          │ delete before target groups and │
+│  addresses)              │ web containers, health  │  + 0.010             │ ~₹3.90    │ can't be stopped         │  the VPC                        │
+│                          │ checks                  │                      │           │                          │                                 │
+├──────────────────────────┼─────────────────────────┼──────────────────────┼───────────┼──────────────────────────┼─────────────────────────────────┤
+│ ECS Fargate web (0.5     │ runs Django/Gunicorn    │ ~0.025               │ ~₹2.40    │ "desired count 0" = $0   │ delete services, then the       │
+│ vCPU, 1 GB)              │                         │                      │           │                          │ cluster                         │
+├──────────────────────────┼─────────────────────────┼──────────────────────┼───────────┼──────────────────────────┼─────────────────────────────────┤
+│ ECS Fargate worker (0.25 │ runs Celery             │ ~0.012               │ ~₹1.20    │ same                     │ same                            │
+│  vCPU, 0.5 GB)           │                         │                      │           │                          │                                 │
+├──────────────────────────┼─────────────────────────┼──────────────────────┼───────────┼──────────────────────────┼─────────────────────────────────┤
+│ RDS PostgreSQL           │                         │                      │           │ stopped: storage still   │ delete without a final snapshot │
+│ db.t4g.micro, 20 GB gp3, │ managed database,       │ ~0.016 + storage     │ ~₹1.80    │ charged; restarts by     │  (or keep one, which is         │
+│  single-AZ               │ backups                 │ ~0.003               │           │ itself after 7 days      │ billed), and delete automated   │
+│                          │                         │                      │           │                          │ backups                         │
+├──────────────────────────┼─────────────────────────┼──────────────────────┼───────────┼──────────────────────────┼─────────────────────────────────┤
+│ ElastiCache Redis        │ Celery's queue          │ ~0.016               │ ~₹1.55    │ can't be stopped         │ delete the cluster, then its    │
+│ cache.t4g.micro          │                         │                      │           │                          │ subnet group                    │
+├──────────────────────────┼─────────────────────────┼──────────────────────┼───────────┼──────────────────────────┼─────────────────────────────────┤
+│ ECR (2 repositories,     │ stores the Docker       │ ~$0.05/month         │ ~₹5/month │ storage                  │ delete the repositories (with   │
+│ ~0.5 GB)                 │ images                  │                      │           │                          │ their images)                   │
+├──────────────────────────┼─────────────────────────┼──────────────────────┼───────────┼──────────────────────────┼─────────────────────────────────┤
+│ S3 (frontend + media     │ React files, uploaded   │ ~0                   │ ~0        │ storage                  │ empty, then delete              │
+│ buckets)                 │ images                  │                      │           │                          │                                 │
+├──────────────────────────┼─────────────────────────┼──────────────────────┼───────────┼──────────────────────────┼─────────────────────────────────┤
+│                          │ HTTPS, caching, one     │ 0 (free tier: 1 TB   │           │                          │                                 │
+│ CloudFront distribution  │ address                 │ and 10 M requests    │ 0         │ "Disable", then delete   │ disabling takes a few minutes   │
+│                          │                         │ per month)           │           │                          │                                 │
+├──────────────────────────┼─────────────────────────┼──────────────────────┼───────────┼──────────────────────────┼─────────────────────────────────┤
+│ CloudWatch Logs          │ container logs          │ ~$0.50 per GB (tiny  │ ~0        │ stored logs              │ delete the log groups           │
+│                          │                         │ here)                │           │                          │                                 │
+├──────────────────────────┼─────────────────────────┼──────────────────────┼───────────┼──────────────────────────┼─────────────────────────────────┤
+│ SSM Parameter Store      │ secrets                 │ 0                    │ 0         │ —                        │ delete the parameters           │
+│ (standard)               │                         │                      │           │                          │                                 │
+├──────────────────────────┼─────────────────────────┼──────────────────────┼───────────┼──────────────────────────┼─────────────────────────────────┤
+│ IAM roles, OIDC          │                         │                      │           │                          │                                 │
+│ provider, Budgets, cost  │ permissions, safety     │ 0                    │ 0         │ —                        │ delete at the end               │
+│ allocation tags          │                         │                      │           │                          │                                 │
+└──────────────────────────┴─────────────────────────┴──────────────────────┴───────────┴──────────────────────────┴─────────────────────────────────┘
+
+- Total while everything runs: about $0.17/hour ≈ ₹16/hour.
+- A full build-and-test day (8 hours): about $1.40 ≈ ₹135. Forgetting it for a month would cost about $120 ≈ ₹11,500, which is why step 11 is strict.
+- Not used, to save money: no Multi-AZ (it doubles RDS), no second NAT, no Secrets Manager (Parameter Store is free), no Container Insights, no WAF. Each is explained in the docs as "what production would add".
+
+3. Identities and credentials (project-only; everything deleted at the end)
+
+- Console work: the user's existing admin IAM user, with MFA enabled if it isn't already. No new access keys for console work.
+- GitHub Actions deploy:
+  - An IAM OIDC identity provider for token.actions.githubusercontent.com.
+  - A role shoplite-github-deploy that trusts only repo:makaveli006/shoplite:environment:production.
+  - Least privilege: push to the two ECR repositories; register task definitions; update the two ECS services and run the migration task; iam:PassRole for the two task roles only; S3 write to the frontend bucket; invalidate the one CloudFront distribution.
+  - No long-lived keys.
+- ECS roles:
+  - Task execution role: pulls from ECR, writes logs, reads /shoplite/* parameters.
+  - Web and worker task roles: read and write only the media bucket.
+- Terraform phase: a separate IAM user shoplite-terraform with an access key used only as environment variables for Terraform (no AWS CLI), with permissions limited to the services used. Deleted after terraform destroy.
+
+4. Code changes, on branch feature/aws-deploy (done by me, tested locally, then a draft PR)
+
+- Gunicorn: uv add gunicorn whitenoise django-storages[s3]. The Dockerfile gets two build stages: web (Gunicorn, collectstatic at build time) and worker (Celery). It keeps the non-root user, and the web stage has a HEALTHCHECK.
+- Settings, all from environment variables:
+  - WhiteNoise serves /static/ (the admin's files).
+  - S3 media storage is used when AWS_STORAGE_BUCKET_NAME is set (local development keeps the disk).
+  - SECURE_PROXY_SSL_HEADER is configurable, set to HTTP_CLOUDFRONT_FORWARDED_PROTO on AWS.
+  - CSRF_TRUSTED_ORIGINS / ALLOWED_HOSTS get the CloudFront domain.
+  - DB_SSLMODE=require for RDS.
+  - Logging goes to stdout (CloudWatch).
+- Health check: a tiny /healthz/ answered by a middleware that runs before the host check, so the ALB's IP-address health checks work while ALLOWED_HOSTS stays strict.
+- Email pictures: core/emails.product_thumbnail opens the file through Django's storage (product.image.open()) instead of .path, so it works with S3. The existing tests stay green, plus one new test.
+- Frontend: built with VITE_API_URL=/api (same address as the shop). CloudFront serves index.html for page addresses through a CloudFront Function on the default behaviour only, so real API 404s aren't hidden.
+- .github/workflows/deploy.yml:
+  - Trigger: on workflow_dispatch, and on a push to main after CI passes, through the GitHub Environment production with required reviewer approval.
+  - Steps: OIDC login, then build and push the web and worker images tagged with the git commit, run migrate as a one-off ECS task and wait for it, update both services, and wait until they're stable.
+  - Frontend: build it, s3 sync it, then invalidate CloudFront.
+  - Configuration values live in GitHub Environment variables (they aren't secret); there are no AWS secrets in GitHub.
+- Tests: the backend and frontend suites stay green, and I add tests for the health middleware, the storage-based thumbnail, and the settings switches.
+
+5. Step-by-step console runbook (each step: why · cost · security · delete · checkpoint)
+
+1. Safety: Budgets alert, cost allocation tag, MFA check.
+2. VPC:
+   - Use the "VPC and more" wizard: 2 AZs, 2 public and 2 private subnets, 1 NAT gateway, no VPC endpoints except the free S3 gateway endpoint.
+   - Tag everything.
+3. Security groups (chained, not by IP address):
+   - alb-sg: inbound 80 only from the managed prefix list com.amazonaws.global.cloudfront.origin-facing.
+   - web-sg: 8000 only from alb-sg.
+   - worker-sg: no inbound.
+   - db-sg: 5432 only from web-sg and worker-sg.
+   - redis-sg: 6379 only from web-sg and worker-sg.
+4. Data tier:
+   - RDS: subnet group, then PostgreSQL 16 db.t4g.micro in private subnets, not publicly accessible, encrypted, 1-day backups, deletion protection off (so teardown is simple; explained).
+   - ElastiCache: subnet group, then a Redis OSS cache.t4g.micro single node, with encryption in transit off. The docs explain turning it on in production (it needs rediss://).
+5. Storage: two private S3 buckets (frontend, media) with Block Public Access on and versioning off. Then 2 ECR repositories with scan on push and a lifecycle rule that keeps the last 5 images.
+6. Secrets: SSM SecureStrings /shoplite/DJANGO_SECRET_KEY, /shoplite/DB_PASSWORD, /shoplite/EMAIL_HOST_PASSWORD, and optionally /shoplite/RAZORPAY_*. The user types them into the console; they never enter the chat.
+7. IAM: the ECS task execution role and task roles, the GitHub OIDC provider, and the shoplite-github-deploy role, each with a least-privilege inline policy (I provide the JSON).
+8. First images: run the deploy workflow once with only the build-and-push job, so ECR holds images before the ECS services exist.
+9. ECS:
+   - A cluster (Fargate only).
+   - Task definitions for web, worker and migrate (the web image with the command migrate), with environment values from SSM and plain variables, the awslogs driver, and log retention of 1 day.
+   - The ALB: target group with health check /healthz/, listener 80 with a rule "only if header X-Origin-Verify = <secret>, else 403".
+   - A web service (1 task, private subnets, no public IP) and a worker service (1 task).
+10. CloudFront:
+    - A distribution with origins S3-frontend (OAC), S3-media (OAC) and the ALB (HTTP only, adding the custom header X-Origin-Verify).
+    - Behaviours:
+      - /api/* and /admin/*: caching disabled, all viewer headers except Host, cookies and query strings forwarded, plus CloudFront-Forwarded-Proto.
+      - /static/*: cached.
+      - /media/*: S3.
+      - The default goes to S3, with the SPA-routing CloudFront Function.
+    - Viewer protocol set to Redirect HTTP to HTTPS, TLS 1.2+.
+11. Finish the configuration:
+    - Update the parameters and variables with the CloudFront domain (ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS, FRONTEND_URL).
+    - Run the migrate task.
+    - Run one-off tasks with a command override for seed_catalog and createsuperuser --noinput (the password comes from a parameter).
+12. CI/CD for real: push a small visible change, approve the production environment in GitHub, and watch the deploy. The new version goes live with no downtime, because ECS does a rolling deployment with minimum healthy 100%.
+13. Optional, Razorpay test mode: set the webhook to https://dxxxx.cloudfront.net/api/payments/webhook/. No zrok is needed.
+
+6. Testing window (1–2 hours) and observability
+
+- Things to test:
+  - register and sign in
+  - search, suggestions, wishlist, reviews
+  - checkout plus a Razorpay test payment
+  - emails from the worker
+  - admin pages including image upload to S3
+  - password reset
+- Where to look:
+  - CloudWatch Logs for the web and worker log streams
+  - ALB target health and HTTP 5xx metrics
+  - RDS "Monitoring" (CPU, connections)
+  - ECS service events
+  - a CloudWatch alarm on ALB 5xx and on unhealthy targets, sent to an SNS email topic (both free at this volume)
+- Failure drills (learning): stop the web task and watch ECS replace it; deploy a broken health check and watch ECS roll back (deployment circuit breaker).
+
+7. INTERVIEW-DEPLOYMENT.md (written after the console deployment works, before Terraform)
+
+- Contents:
+  - architecture diagram and request flow
+  - every service: what it is, why it was used, what it solves, how it connects
+  - networking (VPC, subnets, route tables, IGW vs NAT, security-group chaining, the CloudFront prefix list)
+  - IAM and OIDC
+  - secrets
+  - the CI/CD flow (CI checks, then the approval gate, image build, migration, rolling deploy, frontend sync, invalidation)
+  - logging and monitoring, cost table and teardown
+  - trade-offs, what production would add (Multi-AZ, NAT per AZ, WAF, custom domain + ACM, autoscaling, blue/green)
+  - alternatives
+  - about 40 likely interview questions with model answers, plus a 2-minute "tell me about a deployment you did" story
+- No secrets in it. It's committed on the feature branch.
+
+8. Teardown and zero-cost verification (same day)
+
+- Delete in dependency order:
+  a. scale the ECS services to 0, then delete the services, the cluster, and deregister the task definitions
+  b. CloudFront: disable, wait, then delete
+  c. ALB, then target groups
+  d. RDS (no final snapshot) and its automated backups, then the DB subnet group
+  e. ElastiCache, then its subnet group
+  f. NAT Gateway, then release the Elastic IP
+  g. VPC (this removes subnets, route tables, IGW, security groups and the endpoint)
+  h. empty and delete the S3 buckets, then the ECR repositories
+  i. SSM parameters, CloudWatch log groups, alarms, SNS topic
+  j. IAM roles and policies and the OIDC provider
+  k. the GitHub Environment variables
+- Verify:
+  - Tag Editor, searching all regions for Project = shoplite-demo, finds nothing.
+  - The EC2 console shows no Elastic IPs, NAT gateways, load balancers, snapshots or volumes.
+  - RDS has no snapshots.
+  - Next day: Billing → Bills and Cost Explorer (charges show up with a delay of up to 24 hours) show nothing new beyond cents. The Budget stays in place until the Terraform phase is done.
+
+9. Terraform phase (after INTERVIEW-DEPLOYMENT.md)
+
+- infra/terraform/:
+  - versions.tf (AWS provider pinned)
+  - backend.tf: S3 remote state with native S3 locking (use_lockfile = true), in a small state bucket created once and deleted at the very end
+  - variables.tf / terraform.tfvars.example, outputs.tf
+  - modules or files per area: network, security, data, ecs, edge (CloudFront), iam, observability
+  - default_tags for Project
+- Secrets: SSM values are passed as variables marked sensitive, never committed; the .tfvars file with real values stays git-ignored.
+- Flow: terraform init → fmt / validate → plan (reviewed) → apply → the same test checklist → terraform destroy → the same zero-cost verification. Then delete the state bucket and the shoplite-terraform user and key.
+- CI (optional): a GitHub Actions job that runs terraform fmt -check and validate on pull requests.
+- INTERVIEW-TERRAFORM.md:
+  - project structure, providers, resources, variables and outputs
+  - state and locking, dependency graph (implicit vs depends_on)
+  - how each Terraform resource maps to the console step it replaced
+  - security (state holds secrets, least privilege, no keys in code)
+  - init, plan, apply and destroy explained
+  - why IaC and Terraform, best practices
+  - about 30 interview questions with answers, and how to present it
+
+Verification of the plan's execution
+
+- Local: backend and frontend tests, lint and build pass on feature/aws-deploy; docker build --target web and --target worker succeed; running the web image locally with S3/CloudFront settings off still serves the shop.
+- AWS: every checkpoint in section 5 passes (health checks green, pages over HTTPS, admin styled, image upload lands in S3, emails sent by the worker), plus the CI/CD deploy with approval and no downtime.
+- Teardown: the section 8 checklist comes back empty, and the next-day bill check shows no new charges.
+- Git: main only changes when the user merges the draft PR.
+
+How we proceed
+
+One step at a time, pausing after each so the user can do it in the console:
+1. Step 0 safety
+2. The code changes (section 4), done by me
+3. The console steps (section 5) in order
+4. Testing
+5. INTERVIEW-DEPLOYMENT.md
+6. Teardown and verification
+7. Terraform and INTERVIEW-TERRAFORM.md, then destroy and verify
+
+
+
+
+
+NAT GATEWAY
+==============
+Yes — that’s the right idea.
+
+**Network Address Translation (NAT) Gateway** is typically for **outbound connections initiated by resources inside a private subnet**.
+
+Example:
+
+```text
+Private container
+      │
+      │ outbound request
+      ▼
+NAT Gateway
+      │
+      ▼
+Internet API
+```
+
+For example, your container wants to call:
+
+```text
+https://api.openai.com
+https://github.com
+```
+
+That traffic can go:
+
+```text
+Fargate container
+      ↓
+NAT Gateway
+      ↓
+Internet Gateway
+      ↓
+Internet
+```
+
+But when a user on the internet wants to access your application, the request normally does **not** go through the NAT Gateway.
+
+Instead:
+
+```text
+Internet User
+      │
+      │ HTTPS request
+      ▼
+Internet Gateway
+      │
+      ▼
+Application Load Balancer (ALB)
+      │
+      ▼
+Private Fargate container
+```
+
+So in a typical architecture:
+
+```text
+                INBOUND
+                 traffic
+                    │
+Internet ───────────┤
+                    ▼
+            Internet Gateway
+                    │
+                    ▼
+      Application Load Balancer
+                    │
+                    ▼
+            Private Container
+                    │
+                    │ outbound
+                    ▼
+              NAT Gateway
+                    │
+                    ▼
+            Internet Gateway
+                    │
+                    ▼
+                 Internet
+```
+
+The important distinction is:
+
+**Application Load Balancer (ALB)**  
+Handles **incoming application traffic**.
+
+```text
+Internet → ALB → Container
+```
+
+**NAT Gateway**  
+Allows private containers to **initiate outgoing connections**.
+
+```text
+Container → NAT → Internet
+```
+
+One small detail: when the container initiates an outbound connection through the NAT Gateway, the **response to that same connection** comes back through the NAT Gateway.
+
+For example:
+
+```text
+Container
+   │
+   │ GET api.example.com
+   ▼
+NAT Gateway
+   │
+   ▼
+api.example.com
+   │
+   │ response
+   ▼
+NAT Gateway
+   │
+   ▼
+Container
+```
+
+But an unrelated internet user cannot normally do this:
+
+```text
+Internet User
+      │
+      ▼
+NAT Gateway
+      │
+      ✗
+   Container
+```
+
+The NAT Gateway is **not an entry point to your application**.
+
+So the simplest mental model is:
+
+```text
+            IN
+Internet ───────► ALB ───────► Container
+
+            OUT
+Internet ◄────── NAT ◄─────── Container
+```
+
+That mental model is very useful when learning Amazon Web Services (AWS) networking.

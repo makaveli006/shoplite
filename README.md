@@ -319,6 +319,26 @@ Every endpoint can also be explored in the browser (DRF's browsable API): open a
 
 Setting `DJANGO_DEBUG=False` switches on HTTPS redirects, secure cookies and HSTS. Before deploying:
 use a new secret key and strong passwords, set `DJANGO_ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`,
-`DJANGO_CSRF_TRUSTED_ORIGINS` and `VITE_API_URL` to the real domains, run `collectstatic`,
-serve Django with a production server (e.g. Gunicorn) behind HTTPS, and run
+`DJANGO_CSRF_TRUSTED_ORIGINS` and `VITE_API_URL` to the real domains, and run
 `uv run python manage.py check --deploy`.
+
+**Production images.** `backend/Dockerfile` builds two images from the same code:
+
+```powershell
+cd backend
+docker build --target web -t shoplite-web .        # Django behind Gunicorn; static files collected, served by WhiteNoise
+docker build --target worker -t shoplite-worker .  # the Celery worker (also what docker-compose.yml runs)
+```
+
+Everything cloud-specific is switched on by environment variables only, so the same code runs on a
+laptop and on a server (see the "On AWS" block in `backend\.env.example`):
+uploads go to Amazon S3 when `AWS_STORAGE_BUCKET_NAME` is set, the load balancer's health check is
+answered at `/healthz/`, logs go to the container output, and `DB_SSLMODE=require` encrypts the
+database connection.
+
+**Deployment to AWS** (ECS Fargate, RDS, ElastiCache, S3, CloudFront): `.github/workflows/deploy.yml`
+deploys after CI passes on `main` and a reviewer approves the `production` environment. It signs in
+to AWS with OIDC (no AWS keys stored in GitHub), pushes the images to ECR, runs the migrations as a
+one-off task, rolls the ECS services onto the new images, and uploads the React app to S3. It only runs
+when the repository variable `DEPLOY_ENABLED` is `true`. `deploy/aws/` holds pieces pasted into the
+AWS Console (e.g. the CloudFront Function for React page addresses).

@@ -31,7 +31,9 @@ services:
 
   # Celery worker: runs background jobs (order confirmation emails).
   worker:
-    build: ./backend
+    build:
+      context: ./backend
+      target: worker  # the Celery image (backend/Dockerfile also has a "web" image for servers)
     restart: unless-stopped
     command: celery -A config worker --loglevel=info --concurrency=2
     environment:
