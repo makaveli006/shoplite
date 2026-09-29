@@ -1,0 +1,108 @@
+# Continuous integration: on every push to main (and every pull request), GitHub starts two
+# fresh Linux machines and checks the backend and the frontend at the same time.
+# The result shows on GitHub as a green tick or a red cross next to the commit.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch cancels the older run that is still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# The jobs only need to read the code.
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (Django tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    # A throwaway PostgreSQL 16 next to the job, like the "db" service in docker-compose.yml.
+    # No Redis: the tests never queue real background jobs.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: shoplite
+          POSTGRES_USER: shoplite
+          POSTGRES_PASSWORD: ci_only_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U shoplite -d shoplite"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # What backend/.env gives Django on your PC. These values exist only inside CI.
+    env:
+      DJANGO_SECRET_KEY: ci-only-not-a-real-secret
+      DJANGO_DEBUG: 'True' # keeps the production HTTPS redirect off, like on your PC
+      DB_NAME: shoplite
+      DB_USER: shoplite
+      DB_PASSWORD: ci_only_password
+      DB_HOST: localhost
+      DB_PORT: '5432'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install Python 3.12 and the exact locked packages
+        run: uv sync --locked
+
+      - name: Django system check
+        run: uv run python manage.py check
+
+      - name: Every model change has a migration
+        run: uv run python manage.py makemigrations --check --dry-run
+
+      - name: Run the tests (with coverage)
+        run: uv run coverage run manage.py test
+
+      - name: Coverage report
+        run: uv run coverage report
+
+  frontend:
+    name: Frontend (lint, tests, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      VITE_API_URL: http://localhost:8000/api
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install the exact locked packages
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Tests
+        run: npm test
+
+      - name: Type check and production build
+        run: npm run build
