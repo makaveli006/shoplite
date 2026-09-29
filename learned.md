@@ -9550,3 +9550,50 @@ Worth doing before a real launch, on this branch or later:
 - Refunds from the shop: today a paid-then-cancelled order is only flagged "needs refund" and you refund it in Razorpay's dashboard. The shop could call Razorpay's refund API itself.
 
 ✻ Cooked for 1m 26s · done 6:59 PM
+
+
+
+
+  Ran 1 shell command
+
+Smart search is built on feature/better-search, in one go:
+
+- Backend: 123 tests pass (15 new), and no migrations are missing.
+- Frontend: 52 tests pass (12 new). Lint shows only the 2 old shadcn warnings, and the build passes at 490 kB, still under Vite's 500 kB warning.
+- Database: I applied the migration to your development database, so pg_trgm is installed. Nothing is committed yet.
+
+What & why
+
+- PostgreSQL does the searching now, instead of a plain "contains" match. It reduces words to their root, so "mugs" finds the Mug and "knives" finds the Chef Knife.
+- Results are ranked: a word in the name counts most, then the category, then the description. "knife" shows the Chef Knife first and the bamboo board (which only mentions knives) second. While searching, the sort menu gets a Best match option and uses it by default; choosing another sort still works.
+- Typos are forgiven, by comparing names in three-letter pieces: "headphnes" finds Headphones and "bluetoth speker" finds the Bluetooth Speaker.
+  - Change from the plan: my trial on your real products showed that always mixing in look-alikes made results noisy ("pens" also brought "Pencil", "book" brought "Bamboo Board"). So typo matching is now a fallback, used only when the exact words find nothing, the way real search engines behave.
+- "Did you mean …?" When the words don't match exactly, the page offers the corrected spelling built from the shop's own product and category words, e.g. "Did you mean headphones?". One click searches for it. "pyhton" finds nothing but offers python.
+- Highlights: result cards show the matching part of the description with the words marked, e.g. "A 350 ml stoneware mug…". The marking uses invisible characters instead of HTML, so a product description can never inject anything into the page.
+- Search syntax: "exact phrase" and -exclude work, so knife -chef shows only the bamboo board.
+- Suggestions while typing: after a short pause in typing, a dropdown shows up to 6 matching products with a picture, category and price. It's typo-tolerant too. Use ↓/↑ and Enter, or click, to open one; Enter without a highlighted choice runs a normal search; Escape closes it. Screen readers announce it as a proper suggestion list.
+  - Small change from the plan: a normal Enter simply submits the existing search form, instead of going through a separate "on search" function, so the test checks the form submit.
+- Speed: a special index on product names lets PostgreSQL find look-alike names quickly. With 22 products it hardly matters; the docs explain what a big catalog would add.
+- Docs: the README and CLAUDE.md describe the new search, the API parameters, and the database extension.
+
+Try it
+
+(Restart Django if it was running during the migration. Vite picks up changes automatically.)
+- Word forms: search mugs, and knife: the Chef Knife comes first, and the sort shows Best match.
+- Typos: search headphnes to see the results plus "Did you mean headphones?", then click it. Try pyhton too.
+- Highlights: search stoneware; the card highlights the word in the description.
+- Exclude: search knife -chef.
+- Suggestions: type blue slowly and the dropdown appears. Use the arrow keys and Enter to open a product, or press Escape.
+- Sort: switch the sort to "Price: low to high" while searching, then clear the search.
+
+Git (your steps)
+
+cd C:\Users\subin\OneDrive\Desktop\django-ecommerce
+git branch --show-current          # feature/better-search
+git add .
+git commit -m "Smart search: PostgreSQL full-text + typo fallback, best-match sort, did-you-mean, highlights, suggestions; 27 tests"
+git push -u origin feature/better-search
+gh pr create --draft --base main --title "Better search: PostgreSQL full-text search" --body "Work in progress. Do not merge."
+CI runs on the draft PR. The CI database is also allowed to install pg_trgm, so it should pass. When you're happy with it, merge and delete the branch yourself with option A or B, using this PR's number instead of 1.
+
+✻ Brewed for 11m 44s · done 7:36 PM

@@ -1,13 +1,16 @@
 from django.db.models import Avg, Count, FloatField, ProtectedError, Q, Value
 from django.db.models.functions import Coalesce
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
+from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from core.permissions import IsAdminOrReadOnly
 
-from .filters import ProductFilter
+from .filters import ProductFilter, ProductOrderingFilter, ProductSearchFilter, search_text
 from .models import Category, Product
-from .serializers import CategorySerializer, ProductSerializer
+from .search import did_you_mean, suggest
+from .serializers import CategorySerializer, ProductSerializer, ProductSuggestionSerializer
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -50,13 +53,13 @@ class ProductViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminOrReadOnly]
     lookup_field = 'slug'
 
+    # Filters (?category=...), then search (?search=..., catalog/search.py), then ordering.
+    filter_backends = [DjangoFilterBackend, ProductSearchFilter, ProductOrderingFilter]
     # ?category=kitchen&min_price=10&max_price=50&in_stock=true  (catalog/filters.py)
     filterset_class = ProductFilter
-    # ?search=mug -> case-insensitive "contains" match in any of these fields
-    search_fields = ['name', 'description', 'category__name']
-    # ?ordering=price, ?ordering=-price, ?ordering=name, ?ordering=-rating (top rated) ...
-    # Only these fields are allowed.
-    ordering_fields = ['price', 'name', 'created_at', 'rating']
+    # ?ordering=price, ?ordering=-price, ?ordering=name, ?ordering=-rating (top rated),
+    # ?ordering=-relevance (best match, the default while searching). Only these are allowed.
+    ordering_fields = ['price', 'name', 'created_at', 'rating', 'relevance']
     # Default when no ?ordering= is given. Also needed because of the annotate() below:
     # Meta.ordering is ignored in GROUP BY queries.
     ordering = ['-created_at']
@@ -76,3 +79,22 @@ class ProductViewSet(viewsets.ModelViewSet):
         if self.request.user.is_staff:
             return queryset
         return queryset.filter(is_active=True)
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        text = search_text(request)
+        if text:
+            # "Did you mean headphones?" when nothing matches the typed words exactly.
+            shop = Product.objects.filter(is_active=True)
+            response.data['did_you_mean'] = did_you_mean(shop, text)
+        return response
+
+    @action(detail=False, url_path='suggest', permission_classes=[IsAdminOrReadOnly], pagination_class=None)
+    def suggest(self, request):
+        """GET /api/products/suggest/?q=hea -> up to 6 product names for the search box's dropdown.
+
+        (This address takes the place of a product with the slug "suggest".)
+        """
+        products = Product.objects.filter(is_active=True).select_related('category')
+        matches = suggest(products, request.query_params.get('q', ''))
+        return Response(ProductSuggestionSerializer(matches, many=True, context={'request': request}).data)

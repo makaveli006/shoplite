@@ -7,7 +7,8 @@ Customers browse products, fill a cart and check out; staff manage products, cat
 
 ## Features
 
-- **Catalog**: categories and products with images, search, filters (category, price range), sorting and pagination
+- **Catalog**: categories and products with images, filters (category, price range), sorting and pagination
+- **Smart search** (PostgreSQL full-text search): finds other forms of a word ("mugs" → Mug), ranks results by best match (name before category before description), forgives typos ("headphnes" → Headphones) with a "Did you mean …?" link, highlights the matching words, understands `"exact phrase"` and `-exclude`, and suggests products while you type
 - **Accounts**: registration, login with JWT (short-lived access token, automatic silent refresh), profile page
 - **Password reset by email**: one-time signed links that expire, with a rate limit against inbox flooding
 - **Cart**: server-side cart per customer, with stock checks
@@ -117,7 +118,7 @@ docker compose ps        # db and redis should be "healthy", worker "running"
 ```powershell
 cd backend
 uv sync                                     # creates .venv and installs the locked packages
-uv run python manage.py migrate             # creates the tables
+uv run python manage.py migrate             # creates the tables (and switches on PostgreSQL's pg_trgm for search)
 uv run python manage.py seed_catalog        # sample categories and products
 uv run python manage.py createsuperuser     # a staff account for the admin area
 uv run python manage.py runserver
@@ -294,7 +295,8 @@ All addresses start with `/api/`. Send the access token as `Authorization: Beare
 | `POST auth/password-reset/`, `POST auth/password-reset/confirm/` | anyone | email a reset link, set the new password |
 | `GET categories/`, `GET categories/{slug}/` | anyone | categories with product counts |
 | `POST/PATCH/DELETE categories/…` | staff | manage categories |
-| `GET products/?search=&category=&min_price=&max_price=&ordering=&page=` | anyone | product list (12 per page) with `average_rating` and `review_count`; `ordering=-rating` = top rated |
+| `GET products/?search=&category=&min_price=&max_price=&ordering=&page=` | anyone | product list (12 per page) with `average_rating` and `review_count`; `ordering=-rating` = top rated. With `search` (full-text, typo-tolerant, `"phrase"` and `-word` allowed) the default order is `-relevance` (best match), each product gets a `search_snippet`, and the answer adds `did_you_mean` |
+| `GET products/suggest/?q=` | anyone | up to 6 products for the search box while typing (2+ characters, typo-tolerant) |
 | `GET products/{slug}/` | anyone | one product |
 | `POST/PATCH/DELETE products/…` | staff | manage products (multipart for images) |
 | `GET products/{slug}/reviews/` | anyone | the product's reviews (5 per page, newest first) |

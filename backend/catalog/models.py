@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.contrib.postgres.indexes import GinIndex, OpClass
 from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils.text import slugify
@@ -57,6 +58,12 @@ class Product(models.Model):
         constraints = [
             # Enforced by PostgreSQL itself, even if validation is bypassed.
             models.CheckConstraint(condition=models.Q(price__gt=0), name='product_price_positive'),
+        ]
+        indexes = [
+            # A "trigram" index on the name: lets PostgreSQL find look-alike names (typos) and
+            # "contains" matches without reading every product. (It needs the pg_trgm extension,
+            # installed by migration 0003.)
+            GinIndex(OpClass('name', name='gin_trgm_ops'), name='product_name_trgm_idx'),
         ]
 
     def __str__(self):

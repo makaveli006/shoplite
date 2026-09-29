@@ -56,6 +56,15 @@ Everything comes from env vars via the `env_bool` / `env_list` helpers in `confi
 - The allowed transitions are **mirrored in the frontend** (the next-step buttons in `frontend/src/pages/admin/AdminOrdersPage.tsx`); keep both in sync.
 - Catalog resources are looked up by `slug`. Deleting a category that still has products returns 409 (`ProtectedError`). The category list is annotated with `product_count` and is not paginated.
 
+### Search (`catalog/search.py`)
+- **One place:** all search rules live in `catalog/search.py`. `ProductViewSet.filter_backends = [DjangoFilterBackend, ProductSearchFilter, ProductOrderingFilter]` (`catalog/filters.py`); DRF's `SearchFilter` is no longer used for products.
+- **Matching:** PostgreSQL full-text search (`SearchQuery(search_type='websearch', config='english')`, so `"phrase"` / `-word` work) over name (weight A) + category name (B) + description (C). **Typo tolerance is a fallback:** `TrigramWordSimilarity` on the name (≥ `TYPO_SIMILARITY` 0.35) counts only when nothing matches exactly, and `-words` are excluded in both modes.
+- **Ordering:** products are annotated with `relevance` (rank + 0.5 × similarity). While `?search=` is present without `?ordering=`, the default is `-relevance`. Without a search, `relevance` is a constant 0, so `?ordering=-relevance` never errors.
+- **Highlights:** `search_snippet` is a `SearchHeadline` of the description with matches wrapped in the control characters `\x02`/`\x03`. The serializer returns it only if it contains a match. The frontend renders it with `components/products/HighlightedText.tsx`: no HTML, no `dangerouslySetInnerHTML`.
+- **`did_you_mean`:** added to list responses only while searching. It's offered only when nothing matches the words exactly; each unknown word is corrected with `difflib` against the words of active product and category names, and the correction must itself match. A large catalog would cache this vocabulary or use `ts_stat`, and would store a precomputed `search_vector` column with a GIN index instead of computing vectors per query.
+- **Suggest:** `GET /api/products/suggest/?q=` (a list-route `@action`, unpaginated, active products only, 2+ characters, contains-matches first, max 6) feeds `components/products/SearchBox.tsx`, an ARIA combobox that debounces via `hooks/useDebouncedValue.ts`.
+- **Database:** migration `catalog/0003_search` runs `TrigramExtension()` (the DB user needs permission to create extensions) and adds a `gin_trgm_ops` index on `Product.name`. `django.contrib.postgres` is in `INSTALLED_APPS`.
+
 ### Reviews (`reviews` app)
 - **Who may review:** `Review` has one row per (user, product), enforced by a `UniqueConstraint`, and a 1–5 `CheckConstraint`. `reviews/services.can_review()` is the rule: the user has an `OrderItem` for the product in an order with status `delivered`. The POST view returns 403 without a delivered order and 400 for a second review; an `IntegrityError` from the unique constraint is caught as the safety net.
 - **Routes:** `reviews/urls.py` has plain paths under `products/<slug>/reviews/` (public list, POST) and `products/<slug>/reviews/me/` (GET `{can_review, review}`, PATCH, DELETE). The "me" route makes ownership implicit. It's included in `config/urls.py` **before** `catalog.urls`.
@@ -106,7 +115,7 @@ Emails sent by a task that the test calls directly land in `mail.outbox`. Celery
   - Mock the API module (`vi.mock('@/api/catalog', ...)`).
   - Render with `renderWithProviders(ui, { route, auth })` from `src/test/render.tsx`. It supplies Query, the router and an `AuthContext`, signed out by default; pass `auth: signedIn()` from `src/test/fixtures.ts` for a signed-in customer.
   - Anything that calls `useAuth()` needs this, because it throws without a provider.
-  - Data builders: `makeProduct`, `makeUser`, `makeOrder`, `makeWishlistItem`, `page`.
+  - Data builders: `makeProduct`, `makeUser`, `makeOrder`, `makeWishlistItem`, `makeSuggestion`, `page`.
   - The providers are passed as a `wrapper`, so `rerender()` keeps them.
   - Browser-only globals (`window.Razorpay`) are faked with a small class that records its options (see `PayButton.test.tsx`).
 

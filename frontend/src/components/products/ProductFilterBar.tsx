@@ -6,7 +6,12 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { Category } from '@/types/api'
 
+import { SearchBox } from './SearchBox'
+
 const ALL = 'all' // Select items can't have an empty value, so "all categories" gets its own word.
+
+// Only offered while searching: the server's ranking of how well each product matches.
+const BEST_MATCH = { value: '-relevance', label: 'Best match' }
 
 const SORT_OPTIONS = [
   { value: '-created_at', label: 'Newest first' },
@@ -32,8 +37,9 @@ interface Props {
 }
 
 /**
- * Search box, category, price range and sort order.
+ * Search box (with suggestions while typing), category, price range and sort order.
  * Category and sort apply immediately; search text and prices apply when you press Enter or "Search".
+ * While searching, the default sort is "Best match".
  */
 export function ProductFilterBar({ values, categories, onChange, onClear }: Props) {
   // What's typed but not applied yet. Starts from the web address.
@@ -43,21 +49,21 @@ export function ProductFilterBar({ values, categories, onChange, onClear }: Prop
 
   function apply(event: FormEvent) {
     event.preventDefault() // don't let the browser reload the page
-    onChange({ search: search.trim(), min_price: minPrice, max_price: maxPrice })
+    const changes: Partial<FilterValues> = { search: search.trim(), min_price: minPrice, max_price: maxPrice }
+    // "Best match" means nothing without a search: go back to the normal order.
+    if (!changes.search && values.ordering === BEST_MATCH.value) changes.ordering = ''
+    onChange(changes)
   }
 
   const hasFilters = Object.values(values).some(Boolean)
+  const searching = Boolean(values.search)
+  const sortOptions = searching ? [BEST_MATCH, ...SORT_OPTIONS] : SORT_OPTIONS
+  const sort = values.ordering || (searching ? BEST_MATCH.value : '-created_at')
 
   return (
     <form onSubmit={apply} className="flex flex-col gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
       <div className="flex gap-2">
-        <Input
-          type="search"
-          placeholder="Search products..."
-          aria-label="Search products"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
+        <SearchBox value={search} onChange={setSearch} />
         <Button type="submit">
           <Search /> Search
         </Button>
@@ -102,12 +108,12 @@ export function ProductFilterBar({ values, categories, onChange, onClear }: Prop
           onChange={(event) => setMaxPrice(event.target.value)}
         />
 
-        <Select value={values.ordering || '-created_at'} onValueChange={(value) => onChange({ ordering: value })}>
+        <Select value={sort} onValueChange={(value) => onChange({ ordering: value })}>
           <SelectTrigger className="w-48" aria-label="Sort by">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {SORT_OPTIONS.map((option) => (
+            {sortOptions.map((option) => (
               <SelectItem key={option.value} value={option.value}>
                 {option.label}
               </SelectItem>

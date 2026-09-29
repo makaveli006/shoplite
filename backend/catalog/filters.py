@@ -1,6 +1,17 @@
+from django.db.models import CharField, FloatField, Value
 from django_filters import rest_framework as filters
+from rest_framework.filters import BaseFilterBackend
+
+from core.filters import StableOrderingFilter
 
 from .models import Product
+from .search import search_products
+
+SEARCH_PARAM = 'search'
+
+
+def search_text(request):
+    return request.query_params.get(SEARCH_PARAM, '').strip()
 
 
 class ProductFilter(filters.FilterSet):
@@ -26,3 +37,29 @@ class ProductFilter(filters.FilterSet):
         if value:
             return queryset.filter(stock__gt=0)
         return queryset.filter(stock=0)
+
+
+class ProductSearchFilter(BaseFilterBackend):
+    """?search=... with PostgreSQL full-text search and typo tolerance (see catalog/search.py).
+
+    Without a search, every product gets relevance 0 and no snippet, so ?ordering=-relevance
+    still works (it then simply falls back to the newest products).
+    """
+
+    def filter_queryset(self, request, queryset, view):
+        text = search_text(request)
+        if not text:
+            return queryset.annotate(
+                relevance=Value(0.0, output_field=FloatField()),
+                search_snippet=Value(None, output_field=CharField()),
+            )
+        return search_products(queryset, text)
+
+
+class ProductOrderingFilter(StableOrderingFilter):
+    """While searching, the default order is "Best match". Choosing a sort (?ordering=price) wins."""
+
+    def get_ordering(self, request, queryset, view):
+        if search_text(request) and not request.query_params.get(self.ordering_param):
+            return ['-relevance', '-id']
+        return super().get_ordering(request, queryset, view)

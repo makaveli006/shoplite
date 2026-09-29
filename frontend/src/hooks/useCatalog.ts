@@ -1,6 +1,12 @@
 import { keepPreviousData, queryOptions, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { fetchCategories, fetchProduct, fetchProducts, type ProductFilters } from '@/api/catalog'
+import {
+  fetchCategories,
+  fetchProduct,
+  fetchProductSuggestions,
+  fetchProducts,
+  type ProductFilters,
+} from '@/api/catalog'
 
 /** A page of products for the given filters. Each combination of filters is remembered separately. */
 export function useProducts(filters: ProductFilters) {
@@ -9,6 +15,17 @@ export function useProducts(filters: ProductFilters) {
     queryFn: () => fetchProducts(filters),
     // While the next page / filter result loads, keep showing the previous one (no flashing).
     placeholderData: keepPreviousData,
+  })
+}
+
+/** Suggestions for the search box. Asks only from 2 letters on; keeps the last list while typing. */
+export function useProductSuggestions(term: string) {
+  return useQuery({
+    queryKey: ['product-suggestions', term],
+    queryFn: () => fetchProductSuggestions(term),
+    enabled: term.length >= 2,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
   })
 }
 

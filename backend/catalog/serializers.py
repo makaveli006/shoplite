@@ -29,6 +29,16 @@ class CategorySummarySerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'slug']
 
 
+class ProductSuggestionSerializer(serializers.ModelSerializer):
+    """A small product for the search box's dropdown."""
+
+    category = CategorySummarySerializer(read_only=True)
+
+    class Meta:
+        model = Product
+        fields = ['id', 'name', 'slug', 'price', 'image', 'category']
+
+
 class ProductSerializer(serializers.ModelSerializer):
     """Converts Product objects <-> JSON.
 
@@ -49,6 +59,8 @@ class ProductSerializer(serializers.ModelSerializer):
     in_stock = serializers.SerializerMethodField()
     average_rating = serializers.SerializerMethodField()  # e.g. 4.3, or null without reviews
     review_count = serializers.SerializerMethodField()
+    # While searching: the description with the matched words wrapped in \x02...\x03 (or null).
+    search_snippet = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -66,6 +78,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'category_id',
             'average_rating',
             'review_count',
+            'search_snippet',
             'created_at',
             'updated_at',
         ]
@@ -83,6 +96,11 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_review_count(self, obj):
         return getattr(obj, 'review_count', 0)
+
+    def get_search_snippet(self, obj):
+        # Only useful when a description word matched: otherwise it's just the description's start.
+        snippet = getattr(obj, 'search_snippet', None)
+        return snippet if snippet and '\x02' in snippet else None
 
     def validate_image(self, value):
         """Field-level validation: runs for the "image" field only (after DRF/Pillow

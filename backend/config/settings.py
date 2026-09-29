@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.postgres',  # PostgreSQL-only tools: full-text search, trigram (typo) matching, GIN indexes
     # Third-party apps
     'rest_framework',
     'django_filters',

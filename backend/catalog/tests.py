@@ -57,6 +57,109 @@ class ProductReadTests(APITestCase):
         self.assertEqual(client_for(self.admin).get('/api/products/old-mug/').status_code, 200)
 
 
+class ProductSearchTests(APITestCase):
+    """PostgreSQL full-text search with typo tolerance (catalog/search.py), on realistic products."""
+
+    @classmethod
+    def setUpTestData(cls):
+        kitchen = make_category('Kitchen')
+        stationery = make_category('Stationery')
+        electronics = make_category('Electronics')
+        cls.mug = make_product(kitchen, 'Blue Ceramic Mug', '12.50',
+                               description='A 350 ml stoneware mug with a glossy blue glaze.')
+        make_product(kitchen, 'Chef Knife', '49.99', description='A 20 cm stainless steel chef knife.')
+        make_product(kitchen, 'Bamboo Cutting Board', '18.00', description='A sturdy, knife-friendly bamboo board.')
+        make_product(kitchen, 'Discontinued Travel Mug', '9.00', is_active=False, description='No longer sold.')
+        make_product(stationery, 'Gel Pen Set', '4.50', description='Ten smooth gel pens in assorted colours.')
+        make_product(stationery, 'Mechanical Pencil', '3.00', description='A 0.5 mm pencil with a rubber grip.')
+        make_product(electronics, 'Noise-Cancelling Headphones', '99.00', description='Over-ear, active noise cancelling.')
+        make_product(electronics, 'Bluetooth Speaker', '39.00', description='A pocket speaker with a 12-hour battery.')
+
+    def search(self, text, **params):
+        response = client_for().get('/api/products/', {'search': text, **params})
+        self.assertEqual(response.status_code, 200)
+        return response
+
+    def names(self, response):
+        return [product['name'] for product in response.data['results']]
+
+    def test_finds_other_forms_of_a_word(self):
+        self.assertEqual(self.names(self.search('mugs')), ['Blue Ceramic Mug'])
+        self.assertEqual(self.names(self.search('knives')), ['Chef Knife'])
+
+    def test_finds_words_in_the_description_and_highlights_them(self):
+        response = self.search('stoneware')
+        self.assertEqual(self.names(response), ['Blue Ceramic Mug'])
+        self.assertIn('\x02stoneware\x03', response.data['results'][0]['search_snippet'])
+
+    def test_finds_products_by_their_category(self):
+        self.assertEqual(sorted(self.names(self.search('stationery'))), ['Gel Pen Set', 'Mechanical Pencil'])
+
+    def test_name_matches_rank_above_description_matches(self):
+        # The knife has "knife" in its name; the board only in its description.
+        self.assertEqual(self.names(self.search('knife')), ['Chef Knife', 'Bamboo Cutting Board'])
+
+    def test_look_alikes_only_when_nothing_matches_exactly(self):
+        # "pens" matches the pen set itself, so the similar-looking "Pencil" is left out.
+        self.assertEqual(self.names(self.search('pens')), ['Gel Pen Set'])
+
+    def test_forgives_typos_and_suggests_the_right_spelling(self):
+        response = self.search('headphnes')
+        self.assertEqual(self.names(response), ['Noise-Cancelling Headphones'])
+        self.assertEqual(response.data['did_you_mean'], 'headphones')
+
+        response = self.search('bluetoth speker')
+        self.assertEqual(self.names(response), ['Bluetooth Speaker'])
+        self.assertEqual(response.data['did_you_mean'], 'bluetooth speaker')
+
+    def test_no_suggestion_when_the_words_match(self):
+        self.assertIsNone(self.search('mug').data['did_you_mean'])
+
+    def test_nonsense_finds_nothing_and_suggests_nothing(self):
+        response = self.search('xqzvw')
+        self.assertEqual(response.data['count'], 0)
+        self.assertIsNone(response.data['did_you_mean'])
+
+    def test_minus_leaves_words_out(self):
+        self.assertEqual(self.names(self.search('knife -chef')), ['Bamboo Cutting Board'])
+
+    def test_a_chosen_sort_beats_best_match(self):
+        self.assertEqual(self.names(self.search('knife', ordering='price')), ['Bamboo Cutting Board', 'Chef Knife'])
+
+    def test_best_match_sort_without_a_search_is_harmless(self):
+        response = client_for().get('/api/products/', {'ordering': '-relevance'})
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('did_you_mean', response.data)  # only while searching
+        self.assertIsNone(response.data['results'][0]['search_snippet'])
+
+    def test_hidden_products_are_never_found(self):
+        self.assertEqual(self.names(self.search('travel')), [])
+        self.assertEqual(client_for().get('/api/products/suggest/', {'q': 'travel'}).data, [])
+
+    def test_search_results_keep_their_ratings(self):
+        result = self.search('mug').data['results'][0]
+        self.assertEqual((result['review_count'], result['average_rating']), (0, None))
+
+    def test_suggestions_while_typing(self):
+        def suggestions(q):
+            response = client_for().get('/api/products/suggest/', {'q': q})
+            self.assertEqual(response.status_code, 200)
+            return [product['name'] for product in response.data]
+
+        self.assertEqual(suggestions('hea'), ['Noise-Cancelling Headphones'])
+        self.assertEqual(suggestions('bluetoth')[0], 'Bluetooth Speaker')  # a typo still finds it first
+        self.assertEqual(suggestions('b'), [])  # too short to be useful
+        first = client_for().get('/api/products/suggest/', {'q': 'mug'}).data[0]
+        self.assertEqual(set(first), {'id', 'name', 'slug', 'price', 'image', 'category'})
+
+    def test_at_most_six_suggestions(self):
+        kitchen = make_category('Garden')
+        for number in range(8):
+            make_product(kitchen, f'Plant Pot {number}')
+        response = client_for().get('/api/products/suggest/', {'q': 'plant'})
+        self.assertEqual(len(response.data), 6)
+
+
 class ProductWriteTests(APITestCase):
     """Only admins may change the catalog."""
 
