@@ -1,7 +1,15 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { cancelOrder, checkout, fetchOrder, fetchOrders } from '@/api/orders'
-import type { ShippingAddress } from '@/types/api'
+import {
+  cancelOrder,
+  checkout,
+  fetchAdminOrders,
+  fetchOrder,
+  fetchOrders,
+  setOrderStatus,
+  type AdminOrderFilters,
+} from '@/api/orders'
+import type { OrderStatus, ShippingAddress } from '@/types/api'
 
 import { CART_KEY } from './useCart'
 
@@ -34,6 +42,29 @@ export function useCheckout() {
     },
     // A refused checkout (e.g. stock ran out) may mean the cart now has problems: reload it.
     onError: () => queryClient.invalidateQueries({ queryKey: CART_KEY }),
+  })
+}
+
+/** Staff: all orders, filtered by status and search text. */
+export function useAdminOrders(filters: AdminOrderFilters) {
+  return useQuery({
+    queryKey: ['orders', 'admin', filters],
+    queryFn: () => fetchAdminOrders(filters),
+    placeholderData: keepPreviousData,
+  })
+}
+
+/** Staff: change an order's status. Cancelling returns stock, so products are refreshed too. */
+export function useSetOrderStatus() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, status }: { id: number; status: OrderStatus }) => setOrderStatus(id, status),
+    onSuccess: (order) => {
+      queryClient.setQueryData(['order', order.id], order)
+      queryClient.invalidateQueries({ queryKey: ['orders'] })
+      queryClient.invalidateQueries({ queryKey: ['products'] })
+      queryClient.invalidateQueries({ queryKey: ['product'] })
+    },
   })
 }
 

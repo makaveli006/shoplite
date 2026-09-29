@@ -2,6 +2,7 @@ import { isAxiosError } from 'axios'
 import { CheckCircle2, PackageX } from 'lucide-react'
 import { Link, useParams, useSearchParams } from 'react-router'
 
+import { useAuth } from '@/auth/useAuth'
 import { CancelOrderButton } from '@/components/orders/CancelOrderButton'
 import { OrderStatusBadge } from '@/components/orders/OrderStatusBadge'
 import { Button } from '@/components/ui/button'
@@ -17,6 +18,7 @@ export function OrderDetailPage() {
   const [searchParams] = useSearchParams()
   const justPlaced = searchParams.get('placed') === '1'
   const order = useOrder(Number(id))
+  const { user } = useAuth()
 
   if (order.isPending) {
     return <Skeleton className="h-96 w-full" />
@@ -117,7 +119,8 @@ export function OrderDetailPage() {
         <Link to="/orders" className="text-sm underline underline-offset-4">
           See all my orders
         </Link>
-        {data.status === 'pending' && <CancelOrderButton orderId={data.id} />}
+        {/* Only the customer who placed it cancels here; staff use Admin → Orders. */}
+        {data.status === 'pending' && data.customer_email === user?.email && <CancelOrderButton orderId={data.id} />}
       </div>
     </div>
   )

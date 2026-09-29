@@ -5,7 +5,7 @@ import { RequireAdmin, RequireAuth } from '@/components/auth/RouteGuards'
 import { RootLayout } from '@/components/layout/RootLayout'
 import { AccountPage } from '@/pages/AccountPage'
 import { AdminCategoriesPage } from '@/pages/admin/AdminCategoriesPage'
-import { AdminComingSoon } from '@/pages/admin/AdminComingSoon'
+import { AdminOrdersPage } from '@/pages/admin/AdminOrdersPage'
 import { AdminProductsPage } from '@/pages/admin/AdminProductsPage'
 import { CartPage } from '@/pages/CartPage'
 import { CheckoutPage } from '@/pages/CheckoutPage'
@@ -55,7 +55,7 @@ export const router = createBrowserRouter([
               { index: true, element: <Navigate to="products" replace /> }, // /admin opens the products tab
               { path: 'products', Component: AdminProductsPage },
               { path: 'categories', Component: AdminCategoriesPage },
-              { path: 'orders', element: <AdminComingSoon title="All orders" lesson="Lesson 14.3" /> },
+              { path: 'orders', Component: AdminOrdersPage },
             ],
           },
         ],

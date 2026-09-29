@@ -144,6 +144,12 @@ class OrderManagementTests(APITestCase):
     def test_customer_cannot_change_status(self):
         self.assertEqual(self.set_status(self.bob_client, 'paid').status_code, 403)
 
+    def test_admin_can_filter_and_search_all_orders(self):
+        self.assertEqual(self.admin_client.get('/api/orders/', {'status': 'pending'}).data['count'], 1)
+        self.assertEqual(self.admin_client.get('/api/orders/', {'status': 'paid'}).data['count'], 0)
+        self.assertEqual(self.admin_client.get('/api/orders/', {'search': 'bob@'}).data['count'], 1)
+        self.assertEqual(self.admin_client.get('/api/orders/', {'search': 'ana@'}).data['count'], 0)
+
 
 class ConfirmationEmailTests(APITestCase):
     def test_email_contains_order_summary(self):

@@ -7139,3 +7139,112 @@ Tell me:
 Next: Lesson 14.3, all orders. Staff see every customer's orders in a table: filter by status ("everything waiting to be shipped"), open an order, and move it along with buttons (Mark as paid, Mark as shipped, Mark as delivered, Cancel). Only the buttons allowed by the status diagram appear. We'll finish by checking that a normal customer is refused (403) by the API itself for every admin action, the checkpoint from our plan.
 
 ✻ Brewed for 1m 54s · done 3:17 AM
+
+
+
+
+
+Phase 14, Lesson 14.3: Managing all orders, and the final permission check
+
+Lesson 14.2 committed as 982ecf9.
+
+What & why
+
+The last missing staff screen is the one a shop uses most: orders. Staff need to see every customer's orders, find the ones that need attention ("everything paid but not shipped yet"), and move each order to its next step. We already built the rules for this in Lesson 7.4 (the status diagram, and stock returning on cancel) and used them from the Django admin. Now the shop gets its own screen.
+
+At the end we do the checkpoint from the plan: prove that a normal customer is refused by the API itself for every admin action, however they try.
+
+What happens now
+
+The Orders tab (Admin → Orders):
+- A table of every customer's orders, newest first: order number (a link to the order page), customer name and email, date, total, and the coloured status badge.
+- A status filter (All, Pending, Paid, Shipped, Delivered, Cancelled). For example, choosing Paid shows exactly the orders waiting to be shipped.
+- A search box that finds orders by the customer's email or the shipping name. I added this to the backend, with a test for the filter and search, bringing the total to 41 tests, all passing.
+- Pages and filters are kept in the web address, like the other lists.
+
+The "Next step" column only offers moves the rules allow:
+
+┌───────────────────────┬───────────────────────────┐
+│       Order is…       │       Buttons shown       │
+├───────────────────────┼───────────────────────────┤
+│ Pending               │ Mark paid, Cancel         │
+├───────────────────────┼───────────────────────────┤
+│ Paid                  │ Mark shipped, Cancel      │
+├───────────────────────┼───────────────────────────┤
+│ Shipped               │ Mark delivered            │
+├───────────────────────┼───────────────────────────┤
+│ Delivered / Cancelled │ none, since they're final │
+└───────────────────────┴───────────────────────────┘
+
+- Clicking a button moves the order, shows "Order #14 is now shipped.", and updates the badge. The customer's My orders page shows the new status the next time it loads.
+- Cancel asks first, "The order is cancelled and its items go back into stock.", because it can't be undone. The stock really does go back (Lesson 7.4), and product pages are refreshed.
+- The screen's list of allowed moves is a convenience copy. The backend's rules stay in charge. If two staff members act on the same order at the same moment (one marks it shipped while the other clicks Mark paid on an old screen), the server refuses the outdated move with its message, for example "An order that is shipped cannot be changed to paid.", and nothing is broken.
+
+One small fix on the order page: staff can open any order from the table. The customer's Cancel order button now appears only for the customer who placed it. Staff use the Orders tab instead, which uses the staff rules (a customer's cancel only works for their own pending orders).
+
+What I built
+
+- Backend: search for orders by customer email or name, plus a test
+- Frontend: the Orders tab (table, status filter, search, pages, next-step buttons, cancel confirmation), the connections for "all orders" and "change status", and the fix on the order page
+- Removed the now-unused "coming soon" placeholder: all three admin tabs are real
+
+Tested: all 41 backend tests pass, and the frontend's TypeScript check, build, and lint pass.
+
+---
+
+▶️ Your turn
+
+Restart Django (Ctrl+C, then uv run python manage.py runserver) so it has the new search, and run npm run dev.
+
+Step 1: The Orders tab
+
+Sign in as admin → Admin → Orders:
+1. All customers' orders are there (Ana's, Bob's, the race-demo orders, the PowerShell ones).
+2. Status → Pending: only pending orders, and the address shows ?status=pending.
+3. Search ana@: only Ana's orders (combined with the status filter if one is chosen). Clear the search.
+
+Step 2: Move an order through all its steps
+
+1. First, as Ana (in another browser or a private window), place a small new order (for example, 1 × Gel Pen Set). Note its number.
+2. As admin, on the Orders tab, find it (Pending) and click Mark paid. You get "Order #... is now paid.", and its buttons change to Mark shipped / Cancel.
+3. Mark shipped → the only button left is Mark delivered.
+4. Mark delivered → no buttons remain (—).
+5. In Ana's window, open My orders. It says Delivered (reload if the page was already open).
+
+Step 3: Cancel from the admin, and the stock comes back
+
+1. Ana places another order with 2 × Mechanical Pencil. Note the pencil's stock on its product page.
+2. As admin, click Cancel on that order. The dialog explains what happens → confirm. You get "Order #... is now cancelled."
+3. The pencil's stock is back up by 2.
+
+Step 4: The final check, a customer is refused by the API itself
+
+The screens hide admin features from customers, but that's only convenience. Let's prove the API refuses, using PowerShell as if a curious customer were trying on purpose:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+. .\tools\api-helpers.ps1
+$ana = Get-AuthHeader 'ana.silva@example.com' 'Sunny-Garden-42'
+$someOrder = (Invoke-RestMethod "$ap
+Send-Json DELETE "$api/products/chef-knife/" -Headers $ana
+Send-Json POST   "$api/categories/" @{ name = 'Hack' } -Headers $ana
+Send-Json DELETE "$api/categories/books/" -Headers $ana
+Send-Json PATCH  "$api/orders/$someOrder/status/" @{ status = 'delivered' } -Headers $ana
+All six must print 403 {"detail":"You do not have permission to perform this action."}. Ana is signed in (so not 401), but she isn't staff. The knife's price and existence are untouched. This is the golden rule from Lesson 0.1, verified at the very end: the backend enforces the rules, and the frontend just makes them pleasant.
+$someOrder = (Invoke-RestMethod "$api/orders/" -Headers $ana).results[0].id
+
+Send-Json POST   "$api/products/" @{ name = 'Hack'; price = '1.00'; stock = 1; category_id = 2 } -Headers $ana
+Send-Json PATCH  "$api/products/chef-knife/" @{ price = '0.01' } -Headers $ana
+Send-Json DELETE "$api/products/chef-knife/" -Headers $ana
+Send-Json POST   "$api/categories/" @{ name = 'Hack' } -Headers $ana
+Send-Json DELETE "$api/categories/books/" -Headers $ana
+Send-Json PATCH  "$api/orders/$someOrder/status/" @{ status = 'delivered' } -Headers $ana
+All six must print 403 {"detail":"You do not have permission to perform this action."}. Ana is signed in (so not 401), but she isn't staff. The knife's price and existence are untouched. This is the golden rule from Lesson 0.1, verified at the very end: the backend enforces the rules, and the frontend just makes them pleasant.
+
+Step 5: Run all backend tests, build, and commit
+
+cd backend
+uv run python manage.py test
+cd ..\frontend
+npm run build
+cd ..
+git add backend frontend
+git commit -m "Admin orders: all orders with status filter and search, next-step buttons, cancel with stock return"

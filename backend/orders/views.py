@@ -35,7 +35,7 @@ class CheckoutView(APIView):
 
 class OrderViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    GET   /api/orders/               my orders (admins: all orders)   ?status=pending  ?ordering=-total_amount
+    GET   /api/orders/               my orders (admins: all orders)   ?status=pending  ?search=ana  ?ordering=-total_amount
     GET   /api/orders/<id>/          one order
     POST  /api/orders/<id>/cancel/   cancel my pending order (stock is returned)
     PATCH /api/orders/<id>/status/   admins: {"status": "paid" | "shipped" | "delivered" | "cancelled"}
@@ -45,6 +45,8 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
     lookup_value_regex = r'\d+'  # ids are numbers, so "checkout" is never mistaken for an order id
     filterset_fields = ['status']
+    # ?search=ana -> matches the customer's email or the shipping name (useful for staff)
+    search_fields = ['user__email', 'full_name']
     ordering_fields = ['created_at', 'total_amount']
     ordering = ['-created_at']
 
