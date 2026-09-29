@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import json
 from decimal import Decimal
 from unittest import mock
 
@@ -10,7 +11,7 @@ from core.testing import client_for, make_category, make_product, make_user
 from orders.models import Order
 
 from .gateway import PaymentGatewayError
-from .models import Payment
+from .models import Payment, WebhookEvent
 from .services import amount_in_paise
 
 # Dummy keys: the tests never talk to Razorpay.
@@ -193,6 +194,118 @@ class VerifyPaymentTests(PaymentTestCase):
         self.assertEqual(payment.status, Payment.Status.PAID)
         self.assertTrue(payment.needs_refund)
         self.assertEqual(emails, [])
+
+
+def webhook_body(event, razorpay_order_id='order_TEST1', payment_id='pay_TEST1', amount=4999, **payment_fields):
+    """A webhook body shaped like Razorpay's: the payment is at payload.payment.entity."""
+    payment = {'id': payment_id, 'entity': 'payment', 'order_id': razorpay_order_id, 'amount': amount,
+               'currency': 'INR', **payment_fields}
+    return json.dumps({'entity': 'event', 'event': event, 'payload': {'payment': {'entity': payment}}}).encode()
+
+
+class WebhookTests(PaymentTestCase):
+    def setUp(self):
+        super().setUp()
+        self.start()  # Bob opened the payment window: a Payment for order_TEST1 exists
+
+    def deliver(self, body, event_id='evt_1', signature=None):
+        """What Razorpay's server does: POST the body, signed with the webhook secret.
+        Returns (response, the order emails queued after the database commit)."""
+        if signature is None:
+            signature = hmac.new(PAYMENT_SETTINGS['RAZORPAY_WEBHOOK_SECRET'].encode(), body, hashlib.sha256).hexdigest()
+        with mock.patch(QUEUE_EMAIL) as queue_email, self.captureOnCommitCallbacks(execute=True):
+            response = client_for().post(  # no login: Razorpay proves itself with the signature
+                '/api/payments/webhook/', data=body, content_type='application/json',
+                HTTP_X_RAZORPAY_SIGNATURE=signature, HTTP_X_RAZORPAY_EVENT_ID=event_id,
+            )
+        return response, queue_email.call_args_list
+
+    def order_status(self):
+        return Order.objects.get(pk=self.order_id).status
+
+    def test_payment_captured_marks_the_order_paid_and_sends_one_email(self):
+        response, emails = self.deliver(webhook_body('payment.captured', status='captured'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.order_status(), Order.Status.PAID)
+        payment = Payment.objects.get()
+        self.assertEqual((payment.status, payment.razorpay_payment_id), (Payment.Status.PAID, 'pay_TEST1'))
+        self.assertEqual(payment.confirmed_via, Payment.ConfirmedVia.WEBHOOK)
+        self.assertEqual(emails, [mock.call(self.order_id, 'paid', cancelled_by_customer=False)])
+
+    def test_order_paid_event_works_too(self):
+        response, _ = self.deliver(webhook_body('order.paid'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.order_status(), Order.Status.PAID)
+
+    def test_a_repeated_delivery_is_handled_only_once(self):
+        body = webhook_body('payment.captured')
+        _, first_emails = self.deliver(body, event_id='evt_same')
+        response, second_emails = self.deliver(body, event_id='evt_same')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['status'], 'already handled')
+        self.assertEqual(WebhookEvent.objects.count(), 1)
+        self.assertEqual((len(first_emails), second_emails), (1, []))
+
+    def test_wrong_or_missing_signature_is_refused(self):
+        for signature in ['not-the-right-signature', '']:
+            with self.assertLogs('payments.views', 'WARNING'):
+                response, emails = self.deliver(webhook_body('payment.captured'), signature=signature)
+            self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.order_status(), Order.Status.PENDING)
+        self.assertFalse(WebhookEvent.objects.exists())
+
+    @override_settings(RAZORPAY_WEBHOOK_SECRET='')
+    def test_without_a_webhook_secret_nothing_is_trusted(self):
+        with self.assertLogs('payments.views', 'WARNING'):
+            response, _ = self.deliver(webhook_body('payment.captured'), signature='anything')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.order_status(), Order.Status.PENDING)
+
+    def test_a_different_amount_does_not_pay_the_order(self):
+        with self.assertLogs('payments.services', 'ERROR'):
+            response, emails = self.deliver(webhook_body('payment.captured', amount=100))
+
+        self.assertEqual(response.status_code, 200)  # received; our side refuses it
+        self.assertEqual(self.order_status(), Order.Status.PENDING)
+        self.assertEqual(emails, [])
+
+    def test_a_failed_payment_is_recorded_and_a_later_success_still_counts(self):
+        self.deliver(webhook_body('payment.failed', payment_id='pay_FAIL', error_description='Card declined'),
+                     event_id='evt_fail')
+
+        payment = Payment.objects.get()
+        self.assertEqual((payment.status, payment.error_description), (Payment.Status.FAILED, 'Card declined'))
+        self.assertEqual(self.order_status(), Order.Status.PENDING)  # the customer can try again
+
+        self.deliver(webhook_body('payment.captured'), event_id='evt_ok')
+        self.assertEqual(self.order_status(), Order.Status.PAID)
+
+    def test_events_for_unknown_orders_are_acknowledged_and_ignored(self):
+        with self.assertLogs('payments.services', 'WARNING'):
+            response, emails = self.deliver(webhook_body('payment.captured', razorpay_order_id='order_NOT_OURS'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.order_status(), Order.Status.PENDING)
+        self.assertEqual(emails, [])
+
+    def test_other_events_are_acknowledged(self):
+        response, _ = self.deliver(webhook_body('refund.processed'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.order_status(), Order.Status.PENDING)
+
+    def test_browser_first_then_webhook_sends_one_email_in_total(self):
+        receipt = {'razorpay_order_id': 'order_TEST1', 'razorpay_payment_id': 'pay_TEST1',
+                   'razorpay_signature': sign('order_TEST1', 'pay_TEST1')}
+        with mock.patch(QUEUE_EMAIL) as checkout_emails, self.captureOnCommitCallbacks(execute=True):
+            self.bob_client.post('/api/payments/verify/', receipt, format='json')
+
+        response, webhook_emails = self.deliver(webhook_body('payment.captured'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(checkout_emails.call_args_list), 1)
+        self.assertEqual(webhook_emails, [])  # the webhook found it already paid
+        self.assertEqual(Payment.objects.get().confirmed_via, Payment.ConfirmedVia.CHECKOUT)
 
 
 class AmountInPaiseTests(SimpleTestCase):

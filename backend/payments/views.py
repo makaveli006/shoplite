@@ -1,7 +1,11 @@
+import json
+import logging
+
 from django.conf import settings
+from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -9,8 +13,10 @@ from orders.models import Order
 from orders.views import order_response
 
 from . import gateway
-from .models import Payment
-from .services import PaymentError, mark_paid, start_payment
+from .models import Payment, WebhookEvent
+from .services import PaymentError, mark_failed, mark_paid, start_payment
+
+logger = logging.getLogger(__name__)
 
 
 class StartPaymentSerializer(serializers.Serializer):
@@ -99,3 +105,56 @@ class VerifyPaymentView(APIView):
 
         mark_paid(data['razorpay_order_id'], data['razorpay_payment_id'], via=Payment.ConfirmedVia.CHECKOUT)
         return order_response(request, payment.order_id)
+
+
+class RazorpayWebhookView(APIView):
+    """
+    POST /api/payments/webhook/   called by Razorpay's servers, not by a browser.
+
+    Tells us about payments even when the customer closed the tab or lost their internet
+    right after paying. Every request is signed with the webhook secret, so nobody else can
+    pretend to be Razorpay. Answering 200 tells Razorpay "received, don't send it again".
+    """
+
+    permission_classes = [AllowAny]  # Razorpay has no login here; the signature proves who it is
+    authentication_classes = []  # no JWT or session, which also means no CSRF check
+
+    def post(self, request):
+        # The signature covers the exact bytes Razorpay sent: check it BEFORE reading them as JSON.
+        raw_body = request.body
+        if not gateway.webhook_signature_is_valid(raw_body, request.headers.get('X-Razorpay-Signature', '')):
+            logger.warning('Razorpay webhook with a missing or wrong signature was refused.')
+            return Response({'detail': 'Invalid signature.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            payload = json.loads(raw_body)
+        except ValueError:
+            return Response({'detail': 'The body is not JSON.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        event = payload.get('event', '')
+        event_id = request.headers.get('X-Razorpay-Event-Id', '')
+        # All or nothing: if handling fails, the event is not recorded either, so Razorpay's
+        # next delivery of it gets a fresh try.
+        with transaction.atomic():
+            if event_id:
+                try:
+                    with transaction.atomic():
+                        # Razorpay may deliver the same event more than once: the unique event
+                        # id makes a repeated delivery fail here, and it's skipped.
+                        WebhookEvent.objects.create(event_id=event_id, event=event)
+                except IntegrityError:
+                    return Response({'status': 'already handled'})
+            self.handle(event, payload.get('payload', {}))
+        return Response({'status': 'ok'})
+
+    def handle(self, event, payload):
+        payment = payload.get('payment', {}).get('entity', {})
+        razorpay_order_id = payment.get('order_id') or payload.get('order', {}).get('entity', {}).get('id')
+        if not razorpay_order_id:
+            return  # an event without an order: nothing of ours
+
+        if event in ('payment.captured', 'order.paid'):
+            mark_paid(razorpay_order_id, payment.get('id', ''), via=Payment.ConfirmedVia.WEBHOOK,
+                      amount=payment.get('amount'))
+        elif event == 'payment.failed':
+            mark_failed(razorpay_order_id, payment.get('id', ''), payment.get('error_description', ''))
+        # Any other event: acknowledged with 200 and otherwise ignored.
