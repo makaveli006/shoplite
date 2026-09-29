@@ -7790,3 +7790,455 @@ git add backend frontend
 git commit -m "Password reset by email: one-time signed links, rate limit, reset pages; 7 new tests"
 
 ---
+
+
+
+
+
+            response = self.request_reset('ANA@example.com')
+        self.assertEqual(response.status_code, 200)
+        queue_email.assert_called_once()
+        user_id, link = queue_email.call_args.args
+        self.assertEqual(user_id, self.user.pk)
+        self.assertTrue(link.startswith('http://localhost:5173/reset-password/'))
+
+        with mock.patch(QUEUE_RESET_EMAIL) as queue_email:
+
+Added 3 lines, removed 1 line
+        self.assertEqual(codes, [200, 200, 200, 200, 200, 429])
+
+    def test_email_contains_a_working_link(self):
+        send_password_reset_email(self.user.pk)  # run the job directly, no worker needed
+        with mock.patch(QUEUE_RESET_EMAIL) as queue_email:
+            self.request_reset('ana@example.com')
+        send_password_reset_email(*queue_email.call_args.args)  # run the job directly, no worker needed
+
+        self.assertEqual(len(mail.outbox), 1)
+
+  Read 1 file
+
+
+● Update(~\OneDrive\Desktop\django-ecommerce\backend\accounts\tests.py)
+        queue_email.assert_called_once()
+        user_id, link = queue_email.call_args.args
+        self.assertEqual(user_id, self.user.pk)
+        self.assertTrue(link.startswith('http://localhost:5173/reset-password/'))
+        self.assertTrue(link.startswith(f'{settings.FRONTEND_URL}/reset-password/'))
+
+        with mock.patch(QUEUE_RESET_EMAIL) as queue_email:
+
+Added 1 line
+import re
+from unittest import mock
+
+from django.conf import settings
+from django.contrib.auth.tokens import default_token_generator
+from django.core import mail
+from django.core.cache import cache
+
+  Ran 1 shell command
+All 48 tests pass. The worker only reads the code when it starts, so I'll restart it now so it uses the new version.
+
+  Ran 1 shell command
+Those log lines are from before the restart. I'll check that the restarted worker is ready.
+
+The reset link has the time it was made hidden inside it. When someone uses it, the website works out how old the link is, and refuses it if it's more than an hour old.
+
+Two different programs were handling the link:
+
+- The worker in Docker made the link. Its clock runs on world time (UTC), so it wrote down 08:12.
+- Django on Windows checked the link. Its clock runs on India time, so it read 13:45.
+
+Django compared its 13:45 with the 08:12 written in the link and concluded the link was about 5½ hours old. So it rejected a link you had opened a minute after it was sent. You can see the two clocks disagree in the check I ran above.
+
+What I changed
+
+- Who makes the link: Django on Windows now makes it when you press "Send reset link", so the same clock makes it and checks it. The worker's only job now is to put the ready-made link into the email and send it. This matches how the order emails work: the web server decides what goes in the email, and the worker just delivers it.
+- Tests: I updated them to follow the real path: ask for a reset, run the email job, then use the link from the email.
+
+What you need to do
+
+1. Stop and start Django: press Ctrl+C, then run uv run python manage.py runserver.
+2. Ask for a fresh link: go to Forgot password and send a new link. The old emails still contain bad links and won't work.
+3. Use the new link: open it from the new email and choose a new password. It should take you to the sign-in page with a success message.
+
+In real deployments, servers are usually all set to UTC, so this mismatch doesn't happen. Another fix would have been to set the Docker worker to India time. I avoided that because it's fragile: if one program changes time zone later, the bug comes back.
+
+Something you should know about your password: when this conversation resumed, the whole backend/.env file was loaded into my view, including the Gmail app password you had hidden. I haven't repeated it or used it t to see it, so treat it as exposed. Go to your Google Account
+
+What you need to do
+
+1. Stop and start Django: press Ctrl+C, then run uv run python manage.py runserver.
+2. Ask for a fresh link: go to Forgot password and send a new link. The old emails still contain bad links and won't work.
+3. Use the new link: open it from the new email and choose a new password. It should take you to the sign-in page with a success message.
+
+In real deployments, servers are usually all set to UTC, so thnother fix would have been to set the Docker worker to Indiatime. I avoided that because it's fragile: if one program changes time zone later, the bug comes back.
+
+Something you should know about your password: when this conveckend/.env file was loaded into my view, including the Gmail
+        self.assertTrue(link.startswith(f'{settings.FRONTEND_URL}/reset-password/'))
+
+    def test_unknown_email_gets_the_same_answer_and_n
+        with mock.patch(QUEUE_RESET_EMAIL) as queue_email:
+
+● Update(~\OneDrive\Desktop\django-ecommerce\backend\accounts\tests.py)
+Added 1 line
+import re
+from unittest import mock
+
+from django.conf import settings
+from django.contrib.auth.tokens import default_token_generator
+from django.core import mail
+from django.core.cache import cache
+
+  Ran 1 shell command
+
+All 48 tests pass. The worker only reads the code when it starts, so I'll restart it now so it uses the new version.
+
+  Ran 1 shell command
+
+Those log lines are from before the restart. I'll check that the restarted worker is ready.
+
+  Ran 1 shell command
+
+I fixed it: the reset link was being rejected because of a time zone mismatch, not because anything was wrong with the link. All 48 backend tests pass,
+and I've restarted the worker.
+
+What was going on
+
+The reset link has the time it was made hidden inside it. When someone uses it, the website works out how old the link is, and refuses it if it's more
+than an hour old.
+
+Two different programs were handling the link:
+
+- The worker in Docker made the link. Its clock runs on world time (UTC), so it wrote down 08:12.
+- Django on Windows checked the link. Its clock runs on India time, so it read 13:45.
+
+Django compared its 13:45 with the 08:12 written in the link and concluded the link was about 5½ hours old. So it rejected a link you had opened a minute after it was sent. You can see the two clocks disagree in the check I ran above.
+
+What I changed
+
+- Who makes the link: Django on Windows now makes it when you press "Send reset link", so the same clock makes it and checks it. The worker's only job now is to put the ready-made link into the email and send it. This matches how the order emails work: the web server decides what goes in the email, and the worker just delivers it.
+- Tests: I updated them to follow the real path: ask for a resse the link from the email.
+
+What you need to do
+
+1. Stop and start Django: press Ctrl+C, then run uv run python
+2. Ask for a fresh link: go to Forgot password and send a new link. The old emails still contain bad links and won't work.
+3. Use the new link: open it from the new email and choose a new password. It should take you to the sign-in page with a success message.
+
+In real deployments, servers are usually all set to UTC, so this mismatch doesn't happen. Another fix would have been to set the Docker worker to India time. I avoided that because it's fragile: if one program changes time zone later, the bug comes back.
+
+Something you should know about your password: when this conversation resumed, the whole backend/.env file was loaded into my view, including the Gmail app password you had hidden. I haven't repeated it or used it anywhere, but you asked me not to see it, so treat it as exposed. Go to your Google Account → Security → App passwords, delete that app password, create a new one, and paste it into backend/.env yourself. Then restart Django and the worker (docker compose restart worker).
+
+When the reset works for you, it's ready to commit.
+
+✻ Sautéed for 5m 16s · done 1:48 PM
+
+※ recap: You're adding password reset by email to ShopLite, and I fixed the link being rejected as expired. Next, restart Django, request a fresh reset link, and open it from the new email.
+
+> it worked continue to next feature lets
+
+    VITE v8.3.1  ready in 1315 ms
+
+    ➜  Local:   http://localhost:5173/
+    ➜  Network: use --host to expose
+    ➜  press h + enter to show help
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\frontend>
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\frontend> cd ..
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce> git add .
+  warning: in the working copy of 'backend/.env.example', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'backend/accounts/serializers.py', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'backend/accounts/tests.py', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'backend/accounts/urls.py', LF next time Git touches it
+  warning: in the working copy of 'backend/accounts/views.py', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'frontend/src/api/auth.ts', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'frontend/src/pages/LoginPage.tsx', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'frontend/src/router.tsx', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'backend/accounts/tasks.py', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'frontend/src/pages/ForgotPasswordPage.tsx', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'frontend/src/pages/ResetPasswordPage.tsx', LF will be replaced by CRLF the next time Git touches it
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce> git commit -m "Password reset by email: one-time signed links, rate limit, reset pages; 7 new tests"
+  [main 34c19bd] Password reset by email: one-time signed links, rate limit, reset pages; 7 new tests
+   14 files changed, 701 insertions(+), 3 deletions(-)
+   create mode 100644 IDEAS-NEXT.md
+   create mode 100644 backend/accounts/tasks.py
+   create mode 100644 frontend/src/pages/ForgotPasswordPage.tsx
+   create mode 100644 frontend/src/pages/ResetPasswordPage.tsx
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce>
+
+  lets push this into github
+
+  Ran 1 shell command
+
+This project isn't connected to GitHub yet, so there's nowheregoes online, I'll check the whole history for secrets andClaude credits.
+
+  Ran 1 shell command
+
+Only the example files were ever committed, and every commit is yours. I'll run one more check for secret values inside committed files, without printing them.
+
+  Ran 1 shell command
+
+That "True" may just be the '...' placeholder, or the line in settings.py. I'll check which files matched, hiding the values.
+
+  Ran 1 shell command
+
+History's clean—no real passwords or keys were ever committed, just a placeholder and an env-var reference. Now I need you to create a repo on your GitHub account (makaveli006) before I can push, and let me know if you want it public or private.
+
+● User answered Claude's questions:
+· Who should be able to see the ShopLite repository on GitHub? → Public
+· What should the repository be called? → shoplite
+
+Public it is. Since anyone will be able to read the repo, I'll quickly check the current files for the dev passwords you shared earlier.
+
+  Ran 3 shell commands
+
+I found your local admin password "ontash123" exposed in learned.md across your last 3 commits, which is risky to publish. Since the repo hasn't been pushed yet, I'll clean it from those commits (keeping commit messages the same) before going public.
+
+● User answered Claude's questions:
+· Should I remove the password "ontash123" from learned.md pushing publicly? → Remove it (Recommended)
+
+I'll back up the current state to a branch first, then rewrite the three commits.
+
+● Bash(cd "/c/Users/subin/OneDrive/Desktop/django-ecommerce" &&  branch backup-before-cleanup &&FILTER_BRANCH_SQUELCH_WARNING=1 git filte…)
+Rewrite 34c19bd07032363d459df657921b5142af60a7a7 (3/3) (4 seconds passed, remaining 0 predicted)    warning: in the working copy of 'learned.md',
+LF will be replaced by CRLF the next time Git touches it
+
+Ref 'refs/heads/main' was rewritten
+1 file changed (binary, mode only or too large to show)
+(what this command changed; a convenience view, not a review or audit of the command)
+(timeout 5m)
+Allowed by auto mode classifier
+
+Now I'll check that the password is gone and that nothing else changed.
+
+  Ran 2 shell commands
+
+The only change is that single line, and your commits and messages are otherwise identical. I'll delete the backup (it still contains the password), then create the public repo and push.
+
+  Ran 3 shell commands
+
+Pushed. Now for the next feature: let me check the ideas list we saved earlier.
+
+  Ran 1 shell command
+
+Pushed to GitHub with clean history — I scrubbed the leaked ontash123 reference before going public, and only you're listed as author/contributor. Your work email still appears in learned.md and tools/race_demo.py; let me know if you'd like that removed too, and which feature to tackle next.
+
+● User answered Claude's questions:
+· Which feature should we build next? → GitHub Actions (Recommended)
+
+GitHub Actions it is. Following your rules, I'll check the current docs for the uv GitHub Action first.
+
+  Ran 3 shell commands
+
+The docs pin the uv action to an exact version (v10.1.0, by its commit ID). I'll check the latest versions of the other official actions I need, and your
+local tool versions so the CI matches.
+
+  Searched for 1 pattern, ran 2 shell commands
+
+I'll pin the uv action to the exact commit for v10.2.0 since no short v10 label exists, per its docs. Next I'll check which settings the backend needs to start up in CI, where there's no .env file.
+
+  Searched for 1 pattern, ran 1 shell command
+
+I'll set CI with a test secret key, DJANGO_DEBUG=True, and DB edis dependency risk by running tests locally against a deadRedis port to catch any hangs.
+
+  Ran 2 shell commands
+
+CI only needs PostgreSQL since tests don't rely on Redis. I'll now check for missing model migrations and how the frontend behaves when VITE_API_URL isn't
+set.
+
+  Ran 2 shell commands
+
+The frontend doesn't break without .env, but I'll set the address in CI anyway. One last docs check, for the Node action (v7 is new):
+
+  Ran 2 shell commands
+
+Docs confirmed. Last check: the coverage settings, so CI can report coverage the same way you do locally.
+
+  Ran 1 shell command
+
+Everything is checked. Now I'll write the workflow file.
+
+● Write(~\OneDrive\Desktop\django-ecommerce\.github\workflows\ci.yml)
+Wrote 108 lines to ..\.github\workflows\ci.yml
+# Continuous integration: on every push to main (and every pull request), GitHub starts two
+# fresh Linux machines and checks the backend and the frontend at the same time.
+# The result shows on GitHub as a green tick or a red cross next to the commit.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+… +98 lines
+
+Before handing over, I'll run the same frontend steps locally d chance of passing. The backend steps already passed above.
+
+  Ran 2 shell commands
+
+The lint step printed two warnings about shadcn's own files. Warnings shouldn't fail the build, but I'll confirm the exit code.
+
+  Ran 1 shell command
+
+I've written the automatic checks, and every step passes on your PC. GitHub hasn't run them yet: that happens when you push.
+
+What & why
+
+Until now, you've had to remember to run the tests yourself before committing. From now on, every time you push to GitHub (or someone opens a pull request), GitHub rents two fresh Linux computers for a few minutes and checks your project on them, both at the same time:
+
+- Backend computer:
+  - It starts an empty PostgreSQL 16, like the database container in your Docker setup.
+  - It installs Python 3.12 and the exact package versions from your lock file, using uv.
+  - It checks that every model change has a migration, which catches the classic "forgot makemigrations" mistake.
+  - It runs all 48 tests and prints the coverage report.
+- Frontend computer:
+  - It installs Node 22 and the exact packages from package-lock.json.
+  - It runs lint, the 12 tests, and the full TypeScript check and build.
+
+If anything fails, the commit on GitHub gets a red ❌ and you asses, it gets a green ✅. This matters more with every feature we add: if a new feature breaks an old one, you find out within minutes instead of weeks later.
+
+What I changed
+
+I added one new file, .github/workflows/ci.yml. GitHub automator instructions.
+
+- Settings: the file gives the test computers the settings your backend/.env normally provides. They're throwaway values (fake secret key, test database password) that only exist inside those machines, so nothing real is exposed.
+- No Redis: I tested with Redis switched off and the tests don't need it, so CI doesn't start one.
+- Your PC: I ran the same steps locally and all passed: 48 backend tests, 12 frontend tests, lint, build, and migrations up to date. The two lint warnings come from shadcn's own files; they're only notes and don't fail anything.
+
+Your turn
+
+cd C:\Users\subin\OneDrive\Desktop\django-ecommerce
+git add .github
+git commit -m "CI with GitHub Actions: backend tests on PostgreSQL, frontend lint/tests/build"
+git push
+gh run watch
+
+gh run watch shows the run live in your terminal. Or open https://github.com/makaveli006/shoplite/actions in your browser and click the run to see each step.
+
+What to expect
+
+The first run takes about 2–3 minutes. Later runs are faster bmbered. You should see two jobs, Backend (Django tests) andFrontend (lint, tests, build), both green. In the Backend job, open the "Run the tests" step and you'll see the same Ran 48 tests … OK you see locally.
+
+If something goes red, paste me the failing step's output and we'll go through it together.
+
+✻ Churned for 7m 30s · done 2:02 PM
+
+
+
+
+Extension 1: Password reset by email
+
+The Django 5.2 upgrade is committed (2007b7c). I confirmed django 5.2.17, DRF 3.18.1, and django-filter 26.1 on Windows, and 5.2.17 in the worker too. 🎉 The course itself is complete, and this is the first extension.
+
+What & why
+
+Customers forget passwords. Without a reset option, a forgotten password means a lost customer, or an admin changing passwords by hand. Every real shop has a "Forgot your password?" link. It must be convenient, and also safe: it's one of the most attacked parts of any website.
+
+What happens now
+
+1. On Sign in, there's a new "Forgot your password?" link. It opens a page asking for an email address.
+2. The customer enters their email and presses Send reset link. The shop always answers the same way: "If an account exists for this email, we have sent a link to reset the password." That's true whether or not the account exists, so this page can't be used to discover which email addresses are customers (the same idea as the login message in Lesson 5.1).
+3. If the account exists, the background worker (Phase 8) sends an email with a personal link, for example http://localhost:5173/reset-password/Ng/cz6x…. The two parts of the link are the account (in a web-safe focode:
+   - is signed with the secret key, so it can't be guessed or forged (like the JWT signature in Lesson 5.1)
+   - expires after 1 hour
+   - stops working as soon as the password changes, so the link works exactly once
+4. Clicking the link opens Choose a new password: type it twice. The shop compares the two boxes before sending, so a typo doesn't waste the link. The server then checks the link and applies the same password rules as registration (Lesson 5.2). On success: "Your password has been changed. You can sign in now.", and the customer is taken to Sign in.
+5. Problems are explained:
+   - an old, used, or broken link → "This reset link is invaliest a new one." with a Request a new link button
+   - a weak password → the usual messages under the field
+6. Protection against abuse: someone could type a victim's email address a thousand times and flood their inbox. So each visitor may ask for at most 5
+   reset emails per hour. After that, they're told to wait (th Requests).
+
+One honest limitation: a password change doesn't sign out devin. Their login tokens keep working until they expire (up to 7days for the refresh token), because JWTs aren't stored on the server (Lesson 5.1). Shops that need "sign out everywhere" add a token blacklist, which could be a future extension.
+
+What I built
+
+- Backend: two new API addresses, request a reset and set the  job for the worker; the 5-per-hour limit; the frontend address and link lifetime as settings in .env; and 7 new tests, now 48 in total, all passing:
+  - an email is queued only for existing accounts
+  - an unknown email gets the identical answer
+  - the 6th request in an hour is refused
+  - the emailed link really works
+  - a link works only once
+  - broken links are refused
+  - weak passwords are refused
+- Frontend: the Forgot password page, the Choose a new password page (both loaded on demand), and the link on Sign in.
+
+---
+
+▶️ Your turn
+
+Step 1: Restart Django and the worker
+
+In the Django window: Ctrl+C, then uv run python manage.py runserver. Then, from the project root:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+docker compose restart worker
+docker compose logs --tail 30 worker
+The worker only reads the code when it starts (Lesson 8.2), so it has to be restarted to learn the new job. In its start-up list, under [tasks], you'll now see accounts.tasks.send_password_reset_email next to the order confirmation.
+
+(Optional: add FRONTEND_URL=http://localhost:5173 and PASSWORD_RESET_TIMEOUT=3600 to backend\.env, as shown in .env.example. Those are the defaults anyway.)
+
+Step 2: Reset Bob's password
+
+Keep the worker log open in a separate window: docker compose t the frontend (npm run dev) if it isn't running.
+1. Open Sign in → Forgot your password? → enter bob@example.com → Send reset link. You get "Check your email".
+2. In the worker log, the email "Reset your ShopLite password" appears, with the link.
+3. Copy the link from the log into the browser. You're on Choose a new password.
+4. Type two different passwords: "The two passwords are not th
+5. Type 123 twice: the server's password messages appear.
+6. Type Bob-New-Garden-2026 twice → "Your password has been changed." → you're on Sign in. Sign in as Bob with the new password. The old one (Sunny-Garden-42) no longer works.
+
+Step 3: The protections
+
+1. Open the same link again and try to set another password. You get "This reset link is invalid or has expired." with Request a new link.
+2. On Forgot password, enter nobody@example.com. You get the same "Check your email" message, and no email in the worker log.
+3. Request a link a few more times (reload the page between tries). The 6th request within an hour gives "Too many requests. Please wait a while and try
+   again."
+
+(The limit is counted by Django's in-memory cache, so restartil server with several processes, the cache would live in Redisinstead.)
+
+Step 4: Run all the tests
+
+cd backend
+uv run python manage.py test
+cd ..\frontend
+npm test
+npm run build
+→ Ran 48 tests … OK, 12 passed, build OK.
+
+Step 5: Commit
+
+cd ..
+git add backend frontend
+git commit -m "Password reset by email: one-time signed links, rate limit, reset pages; 7 new tests"
+
+---
+
+❓ If something goes wrong
+
+┌─────────────────────────────────────────────────┬────────────────────────────────────────────────┬──────────────────────────────────────────────────┐
+│                  What you see                   │                      Why                       │                       Fix                        │
+├─────────────────────────────────────────────────┼────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ "Check your email", but nothing in the worker   │ The worker wasn't restarted, so it doesn't     │ docker compose restart worker; the waiting email │
+│ log                                             │ know the new job                               │  is sent once it's back (Lesson 8.2)             │
+├─────────────────────────────────────────────────┼────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ The worker log shows Received unregistered task │ Same cause                                     │ Same fix                                         │
+│  of type 'accounts.tasks...'                    │                   │                                                  │
+├─────────────────────────────────────────────────┼───────────────────┼──────────────────────────────────────────────────┤
+│ The link opens a 404 page in the shop           │ The frontend is running old code               │ Restart npm run dev                              │
+├─────────────────────────────────────────────────┼────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ The link says invalid or has expired straight   │ You already used it, changed the password      │ Request a new link                               │
+│ away                                            │ another wad       │                                                  │
+├─────────────────────────────────────────────────┼────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ "Too many requests" during testing              │ The 5-per-hour limit                           │ Restart Django (in development the count is in   │
+│                                                 │                                                │ memory)                                          │
+└─────────────────────────────────────────────────┴────────────────────────────────────────────────┴──────────────────────────────────────────────────┘
+
+---
+
+✅ Checkpoint
+
+Tell me:
+1. the subject line and the link format from the worker log,
+2. what happened when you reused the link, and
+3. the Ran 48 tests line.
+
+Then pick the next extension if you'd like. Remaining ideas from the list: nicer HTML emails and "your order has shipped" emails, auto-reload after a new version, product reviews, wishlist, GitHub + automatic
