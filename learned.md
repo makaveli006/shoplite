@@ -9460,3 +9460,58 @@ git push
 The push updates draft PR #1 and CI runs again. Tell me how the test payment went. Step 3 is the webhook: Razorpay's server tells ours directly, even if the customer closes the tab.
 
 ✻ Baked for 5m 20s · done 5:31 PM
+
+
+
+
+  Ran 1 shell command
+
+All 108 backend tests pass (10 new webhook tests), with no stray warnings, and no migrations are missing. The code for step 3 is done. What's left is connecting Razorpay's servers to your PC, which needs your terminal and your Razorpay dashboard.
+
+What & why
+
+- Razorpay can now tell the shop directly. The shop has a new address, /api/payments/webhook/, that Razorpay's servers call after a payment, instead of the customer's browser. So an order becomes Paid even if the customer closes the tab, loses internet, or the browser crashes right after paying. This is the reliable path; the browser receipt from step 2 is just the fast path for showing "Paid" on screen.
+- Nobody can pretend to be Razorpay. Every call is signed with a webhook secret that only you and Razorpay know. The shop checks the signature against the exact bytes received, before reading anything, and refuses unsigned or wrongly signed calls. Without a secret set up, it trusts nothing.
+- Repeats are harmless. Razorpay sometimes delivers the same event twice. Each event has an id; the shop records it, and a repeat is answered "already handled" without doing the work again. The record and the work are saved together, so if handling ever crashes, the record isn't kept and Razorpay's next attempt gets a fresh try.
+- Events handled:
+  - payment captured / order paid: marks the order paid. The amount must match what we asked for; otherwise it's logged and the order isn't marked paid.
+  - payment failed: records the reason ("Card declined"). The order stays pending, so you can try again.
+  - anything else: acknowledged and ignored.
+- One email, whichever arrives first. Whether the browser receipt or the webhook arrives first, the order is marked paid once and exactly one "Payment received" email goes out. The Payments page in the Django admin shows which one won.
+
+Your turn: connect Razorpay to your PC
+
+1. Open the tunnel. In a new PowerShell window, keep this running while you test:
+zrok2 share public http://localhost:8000 -n public:shoplitesubin
+   It shows your public address, something like https://shoplitesubin.<zrok domain>. The address isn't secret, so you can paste it here if something doesn't work.
+2. Make a webhook secret. Run this in your own terminal; it prints a random secret:
+cd C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend
+uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
+3. Update backend/.env. Add the zrok host (the address without https://) to the allowed hosts, and add the secret:
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,shoplitesubin.<zrok domain>
+RAZORPAY_WEBHOOK_SECRET=<the secret from step 2>
+   Then restart Django (Ctrl+C, then uv run python manage.py runserver).
+4. Add the webhook in the Razorpay Dashboard (Test mode). Go to Account & Settings → Webhooks → Add New Webhook:
+   - Webhook URL: https://<your zrok address>/api/payments/webhook/
+   - Secret: the same secret as in .env
+   - Active events: tick payment.captured, payment.failed and order.paid
+   - Save.
+5. Watch it work. Place an order and pay with the test card (4100 2800 0000 1007, OTP of 4 or more digits). Within a few seconds:
+   - the zrok window and the Django terminal show POST /api/payments/webhook/ answered with 200
+   - the Django admin Webhook events page lists payment.captured and order.paid
+   - in Razorpay: Webhooks → your webhook shows the deliveries as successful
+6. Prove the webhook works alone. Here we stop the browser's receipt from reaching the shop:
+   - In Chrome, press F12 → click ⋮ → More tools → Network request blocking → tick Enable → add the pattern payments/verify.
+   - Pay a new order. The shop shows an error message, because the browser receipt was blocked.
+   - Refresh the order page after a few seconds: it's Paid anyway, and the admin's Payments page says confirmed via: Webhook (Razorpay server). One "Payment received" email arrives.
+   - Turn request blocking off afterwards.
+
+Then commit on the branch:
+cd C:\Users\subin\OneDrive\Desktop\django-ecommerce
+git branch --show-current          # feature/payment-gateway
+git add .
+git commit -m "Payments step 3: signed Razorpay webhook marks orders paid, duplicate deliveries skipped; 10 tests"
+git push
+Tell me what the zrok window shows, or any error. Step 4 is the README and CLAUDE.md, with the PR still a draft.
+
+✻ Sautéed for 2m 18s · done 6:24 PM
