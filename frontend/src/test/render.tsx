@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render } from '@testing-library/react'
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { vi } from 'vitest'
 
@@ -31,11 +31,15 @@ export function renderWithProviders(ui: ReactElement, { route = '/', auth }: Opt
     updateUser: vi.fn(),
     ...auth,
   }
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <AuthContext.Provider value={authValue}>
-        <MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>
-      </AuthContext.Provider>
-    </QueryClientProvider>,
-  )
+  // As a "wrapper", the providers stay in place when a test calls rerender(<NewUi />).
+  function Providers({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={authValue}>
+          <MemoryRouter initialEntries={[route]}>{children}</MemoryRouter>
+        </AuthContext.Provider>
+      </QueryClientProvider>
+    )
+  }
+  return render(ui, { wrapper: Providers })
 }

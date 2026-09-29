@@ -49,8 +49,9 @@ export function CheckoutPage() {
   function placeOrder(event: FormEvent) {
     event.preventDefault()
     checkoutMutation.mutate(form, {
-      // Straight to the confirmation page; "replace" so Back doesn't return to a finished checkout.
-      onSuccess: (order) => navigate(`/orders/${order.id}?placed=1`, { replace: true }),
+      // Straight to the order page, which opens the payment window at once (pay=1).
+      // "replace" so Back doesn't return to a finished checkout.
+      onSuccess: (order) => navigate(`/orders/${order.id}?placed=1&pay=1`, { replace: true }),
     })
   }
 
@@ -143,12 +144,13 @@ export function CheckoutPage() {
               <span>{formatPrice(cart.data.total)}</span>
             </div>
             <p className="text-xs text-muted-foreground">
-              No payment is taken now. Your order is placed as <em>pending</em> and the shop confirms the payment.
+              Next, you pay securely with Razorpay (card, UPI, netbanking). If you don't finish paying, your order
+              waits as <em>pending</em> and you can pay later from the order page.
             </p>
           </CardContent>
           <CardFooter className="mt-2">
             <Button type="submit" size="lg" className="w-full" disabled={checkoutMutation.isPending || cart.data.has_issues}>
-              {checkoutMutation.isPending ? 'Placing your order...' : 'Place order'}
+              {checkoutMutation.isPending ? 'Placing your order...' : 'Place order and pay'}
             </Button>
           </CardFooter>
         </Card>

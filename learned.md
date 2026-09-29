@@ -9401,3 +9401,62 @@ Then tell me the result. Step 2 is the pay button and the Razorpay window in the
 
 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── razorpay-payment-integration ─
 > done, pr created go step 2
+
+
+
+import { makeOrder, makeUser, signedIn } from '@/test/fixtures'
+import { renderWithProviders } from '@/test/render'
+… +80 lines
+
+  Ran 2 shell commands
+
+All 40 frontend tests pass (12 new). Now lint, the build, and a scan of the test output for hidden warnings:
+
+  Ran 1 shell command
+
+Lint, build, and tests all pass cleanly, and the bundle size stayed unchanged since Razorpay's script only loads at payment time. Now I'll confirm which test cards work for Indian payments before you test.
+
+● Fetch(https://razorpay.com/docs/payments/payments/test-card-upi-details/)
+Received 9.5KB (200 OK)
+Allowed by auto mode classifier
+
+Step 2 is done on feature/payment-gateway: the shop now opens Razorpay's payment window right after "Place order". All 40 frontend tests pass (12 new), lint shows only the 2 old shadcn warnings, and the build passes. The backend didn't change in this step. Nothing is committed yet, and main is untouched.
+
+What & why
+
+- Straight to payment: "Place order and pay" creates the order as before, then takes you to the order page, which opens Razorpay's payment window once. The address loses its "pay now" marker straight away, so refreshing the page doesn't reopen the window.
+- The window's script loads only when someone pays. It comes from Razorpay's site, so it doesn't make the shop's first download bigger. Our server's details and Razorpay's script are fetched at the same time, so the window opens quickly.
+- After a successful payment:
+  - Razorpay hands the browser a signed receipt, which goes to our server. The server checks it with the secret key and marks the order Paid.
+  - The page switches to Paid instantly, without a reload.
+  - A "Payment received" message appears, and the "Payment received" email goes out.
+- If you close the window, or the card fails:
+  - You get a clear message, such as "Payment not completed…" or Razorpay's own reason ("Your card was declined").
+  - The order stays Pending, with Pay ₹… now and Cancel order buttons, so you can pay later.
+  - Paying again reuses the same Razorpay payment on our server.
+- Only the customer can pay. Staff looking at someone's order don't see the pay button, the same rule as for cancelling.
+- Tests fake the payment window. A stand-in for Razorpay's window records how it was opened, so the tests can simulate "paid", "closed" and "card declined". The test helper also got a small fix so a test can re-draw a component without losing the shop's setup around it.
+
+Try it (Django and Vite are already running with INR)
+
+1. Add something to the cart, go to Checkout and fill in the address. The button now says Place order and pay.
+2. Click it. You land on the order page and Razorpay's window opens with a Test Mode banner.
+3. Choose Card and use a test card with any future expiry and any CVV, for example Visa 4100 2800 0000 1007. On the OTP page:
+   - Success: type an OTP of 4 to 10 digits. The window closes, the order shows Paid, and the "Payment received" email arrives in your inbox.
+   - Failure: on a new order, type an OTP of fewer than 4 digits. You see "Payment failed: …" and the order stays Pending. Then click Pay ₹… now and pay properly.
+4. Closing the window: start paying, then close the window. You get the "Payment not completed" message, and Pay now works afterwards.
+5. Admin check: in the Django admin, Payments shows each attempt, and the paid one says confirmed via: Checkout (browser).
+6. Razorpay's side: in the Razorpay Dashboard (Test mode), Transactions → Payments shows the test payments.
+
+(The steps above use Razorpay's Indian test cards, confirmed on their docs page. They differ from the card numbers in my plan, which I had marked as unconfirmed.)
+
+Commit and push (branch only)
+
+cd C:\Users\subin\OneDrive\Desktop\django-ecommerce
+git branch --show-current          # feature/payment-gateway
+git add .
+git commit -m "Payments step 2: Razorpay window after placing the order, Pay now button, receipt verification; 12 tests"
+git push
+The push updates draft PR #1 and CI runs again. Tell me how the test payment went. Step 3 is the webhook: Razorpay's server tells ours directly, even if the customer closes the tab.
+
+✻ Baked for 5m 20s · done 5:31 PM
