@@ -10144,3 +10144,465 @@ Internet ◄────── NAT ◄─────── Container
 ```
 
 That mental model is very useful when learning Amazon Web Services (AWS) networking.
+
+
+
+Step 3: Security groups (the firewalls between the parts)
+
+Like the VPC, this step is free. We create five firewalls now and attach them to the resources as we create them in the next steps.
+
+What you're creating and why
+
+- Security group: a firewall attached to a resource (load balancer, container, database). It lists who may connect in and on which port; everything else is blocked. It's stateful: if a connection is allowed in, the reply is allowed back out automatically.
+- Chaining instead of IP addresses: rules say "allow the load balancer's security group", not "allow 10.0.3.7". Containers get new IP addresses every deploy, but the group membership doesn't change. This is what interviewers expect to hear.
+- The chain for ShopLite:
+
+CloudFront ──80──> alb-sg ──8000──> web-sg ──5432──> db-sg
+                                       └──6379──> redis-sg
+                          worker-sg ──5432──> db-sg, ──6379──> redis-sg
+
+  - shoplite-alb-sg (load balancer): accepts port 80 only from CloudFront's servers, using AWS's managed list of CloudFront's addresses, so nobody can go around CloudFront and hit the load balancer directly.
+  - shoplite-web-sg (Django containers): accepts port 8000 only from the load balancer.
+  - shoplite-worker-sg (Celery): accepts nothing in. It only makes outgoing connections (database, Redis, email).
+  - shoplite-db-sg (PostgreSQL): port 5432 only from web and worker.
+  - shoplite-redis-sg (Redis): port 6379 only from web and worker.
+- Outbound: each group keeps AWS's default "allow all outbound". The containers must reach the database, Redis, S3 and the internet (email, Razorpay). The locking down happens on the inbound side of whatever they connect to.
+
+Clicks (region: US East (N. Virginia))
+
+For each group: VPC → Security groups → Create security group, choose VPC: shoplite-vpc (not the default VPC!), add the tags Project = shoplite-demo and Owner = subin, then Create security group. Create them in this order, because later ones point at earlier ones.
+
+1. shoplite-alb-sg, description Load balancer: HTTP only from CloudFront.
+   - Inbound rules → Add rule: Type HTTP (port 80) · Source Custom → start typing pl- and choose the prefix list com.amazonaws.global.cloudfront.origin-facing.
+   - This one rule counts as about 55 rules toward the limit of 60 per group (it's a long list of CloudFront addresses). That's fine; this group needs nothing else.
+2. shoplite-web-sg, description Django containers: 8000 only from the load balancer.
+   - Inbound: Type Custom TCP · Port 8000 · Source Custom → shoplite-alb-sg (start typing sg- or the name).
+3. shoplite-worker-sg, description Celery worker: no inbound.
+   - Inbound: none. Leave the list empty.
+4. shoplite-db-sg, description PostgreSQL: 5432 only from web and worker.
+   - Inbound rule 1: Type PostgreSQL (5432) · Source shoplite-web-sg
+   - Inbound rule 2: Type PostgreSQL (5432) · Source shoplite-worker-sg
+   - The migration task in the deploy workflow also uses shoplite-web-sg, so it can reach the database too.
+5. shoplite-redis-sg, description Redis: 6379 only from web and worker.
+   - Inbound rule 1: Type Custom TCP · Port 6379 · Source shoplite-web-sg
+   - Inbound rule 2: Type Custom TCP · Port 6379 · Source shoplite-worker-sg
+
+Cost
+
+┌───────────────────┬─────────┬─────────────────────────────────────┐
+│      Created      │  Cost   │        Charges when unused?         │
+├───────────────────┼─────────┼─────────────────────────────────────┤
+│ 5 security groups │ $0 (₹0) │ no, security groups are always free │
+└───────────────────┴─────────┴─────────────────────────────────────┘
+
+Deleting it later (step 8 of the plan)
+
+- How: they're deleted together with the VPC (VPC → Actions → Delete VPC removes its security groups). Or one by one: Security groups → select → Actions → Delete security groups.
+- What it affects: AWS won't delete a group that's still attached to something, or that another group's rule points at. Removing the containers, database, Redis and load balancer first (as the teardown order does) frees them.
+
+Checkpoint
+
+In VPC → Security groups, filter by VPC = shoplite-vpc. You should see your 5 groups plus the VPC's automatic default group (leave that one alone). Click each and check its Inbound rules tab:
+- alb-sg: 80 from pl-… (the CloudFront list)
+- web-sg: 8000 from sg-… (alb-sg)
+- worker-sg: no rules
+- db-sg: 5432 from web-sg and from worker-sg
+- redis-sg: 6379 from web-sg and from worker-sg
+
+Tell me when all five match. Step 4 is the data tier: the PostgreSQL database (RDS) and Redis (ElastiCache). These are the first resources that cost money while they exist (about ₹3.35 per hour together), so we'll create them only when you're ready to carry on the same day.
+
+✻ Cooked for 44s · done 10:36 PM
+
+
+
+
+We'll use both in step 9.
+
+Step 5: Storage (S3 buckets and ECR image repositories)
+
+Nearly free: pennies per month for the few megabytes we'll store.
+
+What you're creating and why
+
+- S3 (Simple Storage Service): AWS's file storage, organised in buckets (think "a drive") that hold objects (files). We create two:
+  - frontend bucket: the built React app (index.html, JavaScript, CSS). CloudFront serves it to browsers, so no server is needed for the website itself.
+  - media bucket: product pictures uploaded in the admin. Containers lose their disk when they're replaced, so uploads must live somewhere permanent.
+- Both buckets stay private, with Block all public access on. Nobody on the internet can read them directly. In step 10, CloudFront gets its own permission to read them (Origin Access Control), so the only way in is through CloudFront over HTTPS. This is a classic interview point: "S3 was never public; CloudFront had exclusive access."
+- ECR (Elastic Container Registry): a private Docker Hub inside your account. GitHub Actions uploads the web and worker images here, and ECS downloads them from here. Two repositories: shoplite/web and shoplite/worker.
+  - Immutable tags: once an image is tagged with a commit (like a1b2c3d), that tag can never be overwritten. You always know exactly which code is running, and rolling back means pointing at an older tag.
+  - Scanning: ECR checks images for known security holes in their Linux packages (basic scanning is free).
+  - Lifecycle rule: keep only the last 5 images, so old ones are deleted automatically and storage can't grow forever.
+
+Clicks (region: US East (N. Virginia))
+
+A. The two S3 buckets. Bucket names must be unique across all of AWS worldwide, so add something of your own.
+1. Search S3 → Buckets → Create bucket.
+2. Bucket type: General purpose. If the page asks about a bucket namespace, keep the default.
+3. Bucket name: shoplite-demo-frontend-subin. If it's taken, add digits, for example shoplite-demo-frontend-subin-0930.
+4. Object Ownership: ACLs disabled (recommended). The bucket owner (your account) owns everything, and old-style per-file permissions are switched off.
+5. Block Public Access settings for this bucket: keep Block all public access ticked.
+6. Bucket Versioning: Disable. Keeping old versions of every file would only add storage costs for a 2-hour test.
+7. Tags: Project = shoplite-demo, Owner = subin.
+8. Default encryption: keep SSE-S3 (Amazon S3 managed keys, free) and Bucket Key: Enable.
+9. Advanced settings → Object Lock: Disable. Then Create bucket.
+10. Repeat 1–9 for the second bucket: shoplite-demo-media-subin, using the same suffix digits if you needed them.
+
+B. The two ECR repositories
+1. Search Elastic Container Registry → left menu Private registry → Repositories → Create repository.
+2. Repository name: shoplite/web. The URI prefix <account-id>.dkr.ecr.us-east-1.amazonaws.com/ is filled in for you.
+3. Image tag mutability: Immutable.
+4. Encryption: AES-256 (free).
+5. Scan on push: tick it if the page shows it. Newer consoles moved it to Private registry → Features & Settings → Scanning; there, choose Basic scanning, tick Scan on push, filter *, and save once for the whole registry.
+6. Tags: Project = shoplite-demo, Owner = subin → Create.
+7. Repeat for shoplite/worker.
+8. Lifecycle rule, for each repository: open it → Lifecycle policy (left menu or Actions) → Create rule:
+   - Rule priority: 1
+   - Rule description: Keep the last 5 images
+   - Image status: Any
+   - Match criteria: Image count more than 5
+   - Rule action: expire
+   - Save.
+
+Cost
+
+┌───────────────────────────────────────┬────────────────────────────────────────────────────────────────────┬────────────────────────────────────────┐
+│                Created                │                                Cost                                │          Charges when unused?          │
+├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+│ 2 S3 buckets (a few MB)               │ ~$0.023 per GB-month ≈ ₹0.02 a month at our size; requests cost    │ only for what's stored; an empty       │
+│                                       │ fractions of a paisa                                               │ bucket costs $0                        │
+├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+│ 2 ECR repositories (about 4 images of │ ~$0.10 per GB-month ≈ $0.06 a month (₹6) for about 0.6 GB          │ only for stored images                 │
+│  ~150 MB)                             │                                                                    │                                        │
+├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
+│ Basic image scanning, lifecycle rules │ $0 (₹0)                                                            │ no                                     │
+└───────────────────────────────────────┴────────────────────────────────────────────────────────────────────┴────────────────────────────────────────┘
+
+Deleting it later (step 8 of the plan)
+
+- How:
+  - S3: a bucket must be empty first. S3 → select the bucket → Empty (type permanently delete) → then Delete (type the bucket name). Do it for both.
+  - ECR: Repositories → select both → Delete (type delete). This removes the images inside too.
+- What it affects: without the frontend bucket the website can't load, and without the media bucket product pictures disappear. Without the images, ECS can't start containers. All of that is deleted first in the teardown order, so nothing breaks unexpectedly. Nothing else in the account uses these.
+
+Checkpoint
+
+- S3 → Buckets: your 2 buckets in US East (N. Virginia), and each one's Permissions tab shows Block all public access: On. Tell me the two exact bucket names.
+- ECR → Repositories: shoplite/web and shoplite/worker, tag immutability Immutable, and a lifecycle rule in each. Tell me the URI of one of them, like 123456789012.dkr.ecr.us-east-1.amazonaws.com/shoplite/web. It contains your account number (not a secret, but you can blank the digits if you prefer).
+
+Step 6 is secrets: the database password, Django secret key and email password go into Parameter Store, encrypted and free. You'll type the values yourself in the console.
+
+✻ Brewed for 52s · done 12:04 AM
+
+
+
+
+Step 6: Secrets (Parameter Store)
+
+Free. Nothing here charges by the hour.
+
+What you're creating and why
+
+- The problem: on your laptop, secrets live in backend/.env. In AWS there's no .env file. Putting passwords into the container image or GitHub would be a serious mistake, because anyone with access to the image or the repository could read them.
+- SSM Parameter Store: part of AWS Systems Manager, a small key-value store for configuration. With the SecureString type, each value is encrypted with a key from AWS KMS (Key Management Service). We use AWS's own key alias/aws/ssm, which is free.
+- How the app gets them: in step 9, each container definition says "fill the environment variable DB_PASSWORD from the parameter /shoplite/DB_PASSWORD". ECS reads and decrypts it at container start, using the permission we give it in step 7. The value never appears in GitHub, the image, or the task definition.
+- Why names like /shoplite/...: the shared prefix is like a folder. In step 7 the permission can say "may read /shoplite/*, nothing else". That's least privilege: ShopLite can't read any other application's secrets in the company account.
+- Why not Secrets Manager: it costs $0.40 per secret per month and can rotate passwords automatically. For a short test, Parameter Store's free Standard tier does the same job. A good interview answer: "Parameter Store for static config and secrets; Secrets Manager when you need automatic rotation or cross-account sharing."
+- Only real secrets go here. Non-secret settings (database host, bucket name, CloudFront domain) go straight into the task definition as plain environment variables in step 9.
+
+First, make the new secret values (in your own PowerShell; the output never goes into this chat)
+
+cd C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend
+# 1. A new Django secret key, just for AWS (never reuse your laptop's):
+uv run python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
+# 2. A password for the shop's admin user on AWS:
+uv run python -c "import secrets; print(secrets.token_urlsafe(18))"
+- Email: for real emails from AWS, make a new Gmail App Password just for this test (Google Account → Security → App passwords) and revoke it afterwards. Without it, emails are simply printed into the worker's CloudWatch logs, which works fine for learning.
+
+Clicks (region: US East (N. Virginia))
+
+For each parameter: search Systems Manager → left menu Application Tools → Parameter Store → Create parameter, then fill in:
+- Name: from the table below. Names are case-sensitive, so type them exactly.
+- Description: from the table.
+- Tier: Standard (free; "Advanced" costs money).
+- Type: SecureString.
+- KMS key source: My current account → KMS Key ID: alias/aws/ssm (the default).
+- Value: paste the secret. No quote marks (unlike .env) and no spaces before or after.
+- Tags: Project = shoplite-demo, Owner = subin → Create parameter.
+
+┌─────┬─────────────────────────────────────┬───────────────────────┬───────────────────────────────────────────────────────┬─────────────────────────┐
+│  #  │                Name                 │      Description      │                         Value                         │         Needed?         │
+├─────┼─────────────────────────────────────┼───────────────────────┼───────────────────────────────────────────────────────┼─────────────────────────┤
+│ 1   │ /shoplite/DJANGO_SECRET_KEY         │ Django secret key for │ output of command 1                                   │ yes                     │
+│     │                                     │  AWS                  │                                                       │                         │
+├─────┼─────────────────────────────────────┼───────────────────────┼───────────────────────────────────────────────────────┼─────────────────────────┤
+│ 2   │ /shoplite/DB_PASSWORD               │ RDS master password   │ the password you set for shoplite-db in step 4        │ yes                     │
+├─────┼─────────────────────────────────────┼───────────────────────┼───────────────────────────────────────────────────────┼─────────────────────────┤
+│ 3   │ /shoplite/DJANGO_SUPERUSER_PASSWORD │ Password of the admin │ output of command 2                                   │ yes (used in step 11 to │
+│     │                                     │  user on AWS          │                                                       │  create the admin)      │
+├─────┼─────────────────────────────────────┼───────────────────────┼───────────────────────────────────────────────────────┼─────────────────────────┤
+│ 4   │ /shoplite/EMAIL_HOST_PASSWORD       │ Gmail app password    │ the new Gmail App Password (Google shows it with      │ only for real emails    │
+│     │                                     │ for AWS test          │ spaces; paste it as shown)                            │                         │
+├─────┼─────────────────────────────────────┼───────────────────────┼───────────────────────────────────────────────────────┼─────────────────────────┤
+│ 5   │ /shoplite/RAZORPAY_KEY_SECRET       │ Razorpay test key     │ your Razorpay test secret                             │ only for payments (step │
+│     │                                     │ secret                │                                                       │  13)                    │
+├─────┼─────────────────────────────────────┼───────────────────────┼───────────────────────────────────────────────────────┼─────────────────────────┤
+│ 6   │ /shoplite/RAZORPAY_WEBHOOK_SECRET   │ Razorpay webhook      │ a new one: uv run python -c "import secrets;          │ only for payments (step │
+│     │                                     │ secret for AWS        │ print(secrets.token_urlsafe(32))"                     │  13)                    │
+└─────┴─────────────────────────────────────┴───────────────────────┴───────────────────────────────────────────────────────┴─────────────────────────┘
+
+The Razorpay key ID (rzp_test_…) is public by design, so it goes in as a plain variable in step 9, not here.
+
+Cost
+
+┌────────────────────────────────────────┬─────────────────────────────────────────────────────────┬──────────────────────┐
+│                Created                 │                          Cost                           │ Charges when unused? │
+├────────────────────────────────────────┼─────────────────────────────────────────────────────────┼──────────────────────┤
+│ 3–6 Standard SecureString parameters   │ $0 (₹0) (Standard tier is free up to 10,000 parameters) │ no                   │
+├────────────────────────────────────────┼─────────────────────────────────────────────────────────┼──────────────────────┤
+│ Encryption with alias/aws/ssm          │ $0 (₹0) (AWS-managed key)                               │ no                   │
+├────────────────────────────────────────┼─────────────────────────────────────────────────────────┼──────────────────────┤
+│ Reading them (at each container start) │ $0 (₹0) at standard throughput                          │ no                   │
+└────────────────────────────────────────┴─────────────────────────────────────────────────────────┴──────────────────────┘
+
+Deleting it later (step 8 of the plan)
+
+- How: Parameter Store → tick all the /shoplite/... parameters → Delete → confirm.
+- What it affects: containers read the values only when they start, so already-running containers keep working until they're replaced. Deleting the parameters after the containers (as in the teardown order) breaks nothing. Nothing else in the account uses them.
+- Also: revoke the test Gmail App Password in your Google account, and delete the AWS webhook in Razorpay's dashboard if you create one in step 13.
+
+Checkpoint
+
+Parameter Store → My parameters shows your /shoplite/... parameters, each with Type: SecureString and Tier: Standard. When you open one, the value shows as hidden (****) until you click Show decrypted value. You don't need to do that, and never paste the values here.
+
+Tell me which parameters you created (names only). Step 7 is IAM: the roles that let ECS read these secrets and pull images, plus the GitHub OIDC trust, so CI/CD deploys without any stored AWS keys.
+
+✻ Brewed for 32s · done 12:20 AM
+
+
+
+
+Step 7: IAM (who may do what, with no stored keys)
+
+Free. IAM never costs anything.
+
+Names fixed from here on, because the policies refer to them:
+- ECS cluster: shoplite-cluster
+- Task definition families: shoplite-web, shoplite-worker, shoplite-migrate
+- Roles: the four names below
+
+What you're creating and why
+
+- IAM role: a set of permissions that someone or something can temporarily put on, like a visitor badge. Unlike an IAM user, a role has no password or permanent keys; AWS hands out short-lived credentials (valid for about an hour) whenever the role is assumed. Two parts:
+  - Trust policy: who may use the badge (for example, "ECS containers" or "GitHub Actions from this repo").
+  - Permissions policy: what the badge allows (for example, "read parameters under /shoplite/").
+- shoplite-ecs-execution-role (the task execution role): used by ECS itself, the platform, before your code runs. It downloads the image from ECR, sends container output to CloudWatch Logs, and reads the /shoplite/* secrets to put them into environment variables. It gets AWS's standard policy plus one small policy for only ShopLite's secrets.
+- shoplite-web-task-role and shoplite-worker-task-role (the task roles): used by your running code. boto3 (the S3 uploads) picks them up automatically, which is why no AWS keys exist anywhere in the settings.
+  - Web: may read, write and delete only product pictures in the media bucket.
+  - Worker: may only read them (for email thumbnails).
+  - The difference between the execution role and the task role is a very common interview question.
+- GitHub OIDC identity provider: tells AWS "trust login tokens signed by GitHub Actions". OIDC (OpenID Connect) is a standard way to prove "I am this workflow, from this repository, in this environment". GitHub signs a short-lived token for each run, and AWS checks the signature.
+- shoplite-github-deploy: the deploy workflow's role.
+  - Trust policy: allows only runs from makaveli006/shoplite in the GitHub environment production. So only a run a reviewer approved can use it, not any branch or other repository.
+  - Permissions: exactly what deploy.yml does: push to the two ECR repositories, register task definitions, update the ShopLite services, run the migration task, upload the React app. Nothing else.
+  - Why this matters: no AWS access keys are stored in GitHub, so there's nothing to leak or rotate. This is today's best practice and a strong interview point.
+- iam:PassRole: handing a role to ECS ("run this task with that badge") needs its own permission. The deploy role may hand over only the three ShopLite roles, and only to ECS. Without that limit, a deploy pipeline could start a task with an admin role, a classic privilege-escalation hole.
+
+Clicks
+
+A. Your account number (needed in the JSON)
+1. Top right, click your account name → copy Account ID (12 digits; paste it without dashes).
+2. In each JSON file, before pasting it, replace:
+   - <ACCOUNT_ID> with the 12 digits
+   - <MEDIA_BUCKET> with your media bucket name, e.g. shoplite-demo-media-subin
+   - <FRONTEND_BUCKET> with your frontend bucket name
+
+   Keep the quote marks around them in the JSON.
+
+B. The execution role
+1. IAM → Roles → Create role.
+2. Trusted entity type: AWS service · Service or use case: Elastic Container Service · Use case: Elastic Container Service Task → Next.
+3. Permissions policies: search AmazonECSTaskExecutionRolePolicy → tick it → Next.
+4. Role name: shoplite-ecs-execution-role · Description: ECS pulls ShopLite images, writes logs, reads /shoplite secrets · Tags: Project = shoplite-demo, Owner = subin → Create role.
+5. Open the role → Add permissions → Create inline policy → JSON → replace everything with ecs-execution-secrets-policy.json (with your account ID) → Next → Policy name: shoplite-read-secrets → Create policy.
+
+C. The two task roles
+1. Create role → AWS service → Elastic Container Service → Elastic Container Service Task → Next.
+2. Permissions policies: tick nothing → Next.
+3. Role name: shoplite-web-task-role · Description: ShopLite web containers: read/write product pictures in S3 · Tags as before → Create role.
+4. Open it → Add permissions → Create inline policy → JSON → paste web-task-media-policy.json (with your media bucket) → Next → Policy name: shoplite-media-read-write → Create policy.
+5. Repeat for shoplite-worker-task-role (description ShopLite worker: read product pictures for emails) with worker-task-media-policy.json, policy name shoplite-media-read.
+
+D. The GitHub OIDC identity provider
+1. IAM → Identity providers.
+   - First check: if token.actions.githubusercontent.com is already listed (another company project may use it), don't add it again. Reuse it, and don't delete it at teardown.
+2. Otherwise: Add provider → OpenID Connect.
+   - Provider URL: https://token.actions.githubusercontent.com
+   - Audience: sts.amazonaws.com
+   - Tags as before → Add provider.
+
+E. The deploy role
+1. IAM → Roles → Create role → Trusted entity type: Custom trust policy.
+2. Replace the JSON with github-deploy-trust-policy.json (with your account ID) → Next.
+3. Permissions policies: tick nothing → Next.
+4. Role name: shoplite-github-deploy · Description: GitHub Actions (makaveli006/shoplite, environment production) deploys ShopLite · Tags as before → Create role.
+5. Open it → Add permissions → Create inline policy → JSON → paste github-deploy-permissions-policy.json (with your account ID and frontend bucket) → Next → Policy name: shoplite-deploy → Create policy.
+6. Copy the role's ARN from its summary (like arn:aws:iam::123456789012:role/shoplite-github-deploy). We need it in step 8.
+
+In step 10 we'll add one more permission to shoplite-deploy, "refresh the CloudFront distribution", because that distribution doesn't exist yet.
+
+Cost
+
+┌────────────────────────────────────────────────────┬─────────┬──────────────────────┐
+│                      Created                       │  Cost   │ Charges when unused? │
+├────────────────────────────────────────────────────┼─────────┼──────────────────────┤
+│ 4 IAM roles with their policies                    │ $0 (₹0) │ no                   │
+├────────────────────────────────────────────────────┼─────────┼──────────────────────┤
+│ GitHub OIDC identity provider                      │ $0 (₹0) │ no                   │
+├────────────────────────────────────────────────────┼─────────┼──────────────────────┤
+│ Temporary credentials (STS) used by ECS and GitHub │ $0 (₹0) │ no                   │
+└────────────────────────────────────────────────────┴─────────┴──────────────────────┘
+
+Deleting it later (step 8 of the plan)
+
+- How:
+  - Roles: IAM → Roles → search shoplite → tick the 4 roles → Delete (type delete). Their inline policies go with them.
+  - Identity provider: Identity providers → token.actions.githubusercontent.com → Delete, only if you created it in part D and no other role uses it. Check with the role search: its trust policies mention the provider.
+- What it affects: without the roles, ECS can't start containers and GitHub can't deploy. That's harmless once the services are gone (they're deleted first in the teardown order). Deleting the provider while another project's role still uses it would break that project's deployments, hence the check above.
+
+Checkpoint
+
+- IAM → Roles, search shoplite: 4 roles.
+  - shoplite-ecs-execution-role has 2 policies (AmazonECSTaskExecutionRolePolicy + shoplite-read-secrets).
+  - The two task roles have 1 inline policy each.
+  - shoplite-github-deploy has 1 (shoplite-deploy).
+- Trust relationships tab:
+  - The three ECS roles show ecs-tasks.amazonaws.com.
+  - The deploy role shows the token.actions.githubusercontent.com provider with the repo:makaveli006/shoplite:environment:production condition.
+- IAM → Identity providers lists token.actions.githubusercontent.com.
+- Policy editor: if it showed red errors, the most likely cause is a placeholder not replaced, or a missing quote mark around a value.
+
+Tell me the deploy role's ARN (you can blank the account digits) and your two bucket names. Step 8 is GitHub: the production environment with you as the required reviewer, the variables, and the first image upload to ECR. That's where we solve the "workflow must be on main" question.
+
+✻ Sautéed for 1m 33s · done 12:41 AM
+
+
+
+
+        id: ecr
+
+  Ran 1 shell command
+
+actionlint passes, and all 10 steps after the image upload now follow the "images only" switch. A quick check that mask-aws-account-id really is an input of the credentials action (v6):
+
+  Ran 1 shell command
+
+Confirmed: the option exists and is off by default, so turning it on does matter. Here's step 8.
+
+Step 8: GitHub (production environment, secret, variables, first image upload)
+
+Free. GitHub Actions minutes are free for public repositories. The only AWS cost is storing the images (about ₹6 a month).
+
+What you're creating and why
+
+- GitHub Environment production: a named deployment target with its own rules.
+  - Required reviewer (you): every deployment waits until you click Approve. This is the "change approval" gate real teams use, so nothing reaches production by accident.
+  - Allowed branches: only main and feature/aws-deploy may deploy to it.
+  - It's also what AWS checks: the deploy role's trust policy only accepts runs in environment production, so an unapproved run can't even sign in to AWS.
+- Environment secret AWS_ROLE_ARN: the address of the deploy role. It's not really secret (without GitHub's signed token it's useless), but storing it as a secret hides it in your public logs. The workflow also hides your account number in all later log lines (mask-aws-account-id).
+- Environment variables: the names of your AWS pieces (cluster, repositories, bucket), so the workflow file has no hard-coded names and could deploy to a different environment (like staging) just by using different variables.
+- Repository variables:
+  - DEPLOY_ENABLED=true: the main switch. Without it the workflow does nothing, which protects you after the teardown.
+  - DEPLOY_IMAGES_ONLY=true: for the first run only. It stops right after uploading the images, because the ECS services don't exist yet (step 9).
+- One change to deploy.yml (done): until you merge, the workflow also runs on pushes to feature/aws-deploy, because GitHub only offers "Run workflow" for workflows already on main. There's a comment to remove that trigger before merging; I'll remind you.
+
+Clicks (GitHub, repository makaveli006/shoplite)
+
+A. The environment
+1. Settings (repository tabs) → left menu Environments → New environment → Name: production → Configure environment.
+2. Deployment protection rules: tick Required reviewers → add makaveli006 (you). Leave Prevent self-review unticked, since you're the only reviewer → Save protection rules.
+3. Deployment branches and tags: choose Selected branches and tags → Add deployment branch or tag rule, twice: main, then feature/aws-deploy.
+
+B. The secret (same environment page → Environment secrets → Add environment secret)
+
+┌──────────────┬───────────────────────────────────────────────────────┐
+│     Name     │                         Value                         │
+├──────────────┼───────────────────────────────────────────────────────┤
+│ AWS_ROLE_ARN │ arn:aws:iam::572132468634:role/shoplite-github-deploy │
+└──────────────┴───────────────────────────────────────────────────────┘
+
+C. The environment variables (same page → Environment variables → Add environment variable, one at a time)
+
+┌─────────────────────────┬──────────────────────────────┐
+│          Name           │            Value             │
+├─────────────────────────┼──────────────────────────────┤
+│ AWS_REGION              │ us-east-1                    │
+├─────────────────────────┼──────────────────────────────┤
+│ ECR_REPOSITORY_WEB      │ shoplite/web                 │
+├─────────────────────────┼──────────────────────────────┤
+│ ECR_REPOSITORY_WORKER   │ shoplite/worker              │
+├─────────────────────────┼──────────────────────────────┤
+│ ECS_CLUSTER             │ shoplite-cluster             │
+├─────────────────────────┼──────────────────────────────┤
+│ ECS_SERVICE_WEB         │ shoplite-web                 │
+├─────────────────────────┼──────────────────────────────┤
+│ ECS_SERVICE_WORKER      │ shoplite-worker              │
+├─────────────────────────┼──────────────────────────────┤
+│ ECS_TASK_FAMILY_WEB     │ shoplite-web                 │
+├─────────────────────────┼──────────────────────────────┤
+│ ECS_TASK_FAMILY_WORKER  │ shoplite-worker              │
+├─────────────────────────┼──────────────────────────────┤
+│ ECS_TASK_FAMILY_MIGRATE │ shoplite-migrate             │
+├─────────────────────────┼──────────────────────────────┤
+│ FRONTEND_BUCKET         │ shoplite-demo-frontend-subin │
+├─────────────────────────┼──────────────────────────────┤
+│ VITE_CURRENCY           │ INR                          │
+└─────────────────────────┴──────────────────────────────┘
+
+Three more come later, once those things exist: PRIVATE_SUBNETS and MIGRATE_SECURITY_GROUP (step 9), and CLOUDFRONT_DISTRIBUTION_ID (step 10).
+
+D. The two repository variables (Settings → Secrets and variables → Actions → Variables tab → New repository variable)
+
+┌────────────────────┬───────┐
+│        Name        │ Value │
+├────────────────────┼───────┤
+│ DEPLOY_ENABLED     │ true  │
+├────────────────────┼───────┤
+│ DEPLOY_IMAGES_ONLY │ true  │
+└────────────────────┴───────┘
+
+E. Push, approve, upload (only after A–D are done). In your PowerShell:
+cd C:\Users\subin\OneDrive\Desktop\django-ecommerce
+git branch --show-current          # feature/aws-deploy
+git add .
+git status                         # check: no *.local.json files listed
+git commit -m "AWS: IAM policy templates, deploy workflow on the feature branch, images-only switch"
+git push -u origin feature/aws-deploy
+1. The push starts Deploy to AWS. Open the repository's Actions tab → the run shows Waiting.
+2. Click it → Review deployments → tick production → Approve and deploy.
+3. Watch the steps: Sign in to AWS → Sign in to Amazon ECR → Build and push the images. The rest are skipped (the images-only switch). It takes about 3–5 minutes.
+
+Cost
+
+┌────────────────────────────────────────────────────────┬─────────────────────────────────┬──────────────────────┐
+│                        Created                         │              Cost               │ Charges when unused? │
+├────────────────────────────────────────────────────────┼─────────────────────────────────┼──────────────────────┤
+│ GitHub environment, secret, variables, Actions minutes │ $0 (₹0) (public repository)     │ no                   │
+├────────────────────────────────────────────────────────┼─────────────────────────────────┼──────────────────────┤
+│ 2 images in ECR (~300 MB total, compressed)            │ ≈ $0.03 a month (₹3)            │ only storage         │
+├────────────────────────────────────────────────────────┼─────────────────────────────────┼──────────────────────┤
+│ Upload traffic into AWS                                │ $0 (₹0) (incoming data is free) │ no                   │
+└────────────────────────────────────────────────────────┴─────────────────────────────────┴──────────────────────┘
+
+Deleting it later (step 8 of the plan)
+
+- How:
+  - GitHub: Settings → Environments → production → Delete environment (this removes its secret and variables). Settings → Secrets and variables → Actions → Variables → delete DEPLOY_ENABLED and DEPLOY_IMAGES_ONLY.
+  - Images: deleted together with the ECR repositories.
+- What it affects: without DEPLOY_ENABLED, the deploy workflow skips itself, so later pushes to main don't fail against removed AWS resources. Your normal CI keeps running exactly as before.
+
+Checkpoint
+
+- GitHub Actions: the run is green, with steps 1–4 done and the rest skipped. In the logs, your account number shows as ***.
+- AWS → ECR → shoplite/web and shoplite/worker: each has 1 image, tagged with the commit (a 40-character code), and once scanning finishes, a Vulnerabilities summary.
+
+If a step fails, paste its error message here. The usual causes are a variable name typo, or the trust policy's repo:makaveli006/shoplite:environment:production not matching exactly. Step 9 is the big one, ECS: the NAT gateway (routing), the cluster, task definitions, the load balancer and the two services. That's where the hourly costs start adding up, so do it on a day you can

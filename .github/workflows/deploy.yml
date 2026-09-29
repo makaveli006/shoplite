@@ -6,14 +6,18 @@
 #   4. roll the web and worker ECS services onto the new images (no downtime)
 #   5. build the React app, upload it to S3, and refresh CloudFront's copy of index.html
 #
-# The AWS names and IDs are GitHub "variables" (not secrets: they aren't sensitive).
-# Repository variable: DEPLOY_ENABLED=true switches this workflow on (delete it after the
-# AWS resources are removed, so pushes to main don't try to deploy to nothing).
-# Environment "production" variables: AWS_REGION, AWS_ROLE_ARN, ECR_REPOSITORY_WEB,
-# ECR_REPOSITORY_WORKER, ECS_CLUSTER, ECS_SERVICE_WEB, ECS_SERVICE_WORKER,
-# ECS_TASK_FAMILY_WEB, ECS_TASK_FAMILY_WORKER, ECS_TASK_FAMILY_MIGRATE,
-# PRIVATE_SUBNETS (comma-separated), MIGRATE_SECURITY_GROUP, FRONTEND_BUCKET,
-# CLOUDFRONT_DISTRIBUTION_ID, VITE_CURRENCY.
+# Settings live in GitHub, not in this file:
+# Repository variables:
+#   DEPLOY_ENABLED=true      switches this workflow on (delete it after the AWS resources are
+#                            removed, so pushes don't try to deploy to nothing)
+#   DEPLOY_IMAGES_ONLY=true  only build and push the images (the first run, before the ECS
+#                            services exist); delete it afterwards
+# Environment "production" secret (a secret so it's hidden in the public logs):
+#   AWS_ROLE_ARN
+# Environment "production" variables: AWS_REGION, ECR_REPOSITORY_WEB, ECR_REPOSITORY_WORKER,
+# ECS_CLUSTER, ECS_SERVICE_WEB, ECS_SERVICE_WORKER, ECS_TASK_FAMILY_WEB, ECS_TASK_FAMILY_WORKER,
+# ECS_TASK_FAMILY_MIGRATE, PRIVATE_SUBNETS (comma-separated), MIGRATE_SECURITY_GROUP,
+# FRONTEND_BUCKET, CLOUDFRONT_DISTRIBUTION_ID, VITE_CURRENCY.
 name: Deploy to AWS
 
 on:
@@ -27,6 +31,10 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  # TEMPORARY, while this work lives on its feature branch: GitHub only offers "Run workflow"
+  # for workflows that are already on main. Remove this trigger before merging into main.
+  push:
+    branches: [feature/aws-deploy]
 
 # One deployment at a time, and never cancel one half-way.
 concurrency:
@@ -40,17 +48,18 @@ permissions:
 jobs:
   deploy:
     name: Deploy to production
-    # Switched on at all, and for automatic runs: only when CI passed.
+    # Switched on at all, and for runs after CI: only when CI passed.
     if: >-
       vars.DEPLOY_ENABLED == 'true' &&
-      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     environment: production # a required reviewer must approve before this job starts
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      # The exact commit CI tested (for automatic runs) or the one chosen by hand.
+      # The exact commit CI tested (for runs after CI) or the pushed / chosen one.
       IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
       CLUSTER: ${{ vars.ECS_CLUSTER }}
+      IMAGES_ONLY: ${{ inputs.images_only || vars.DEPLOY_IMAGES_ONLY == 'true' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -59,8 +68,9 @@ jobs:
       - name: Sign in to AWS (OIDC role, no stored keys)
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+          mask-aws-account-id: true # the repository is public: hide the account number in the logs
 
       - name: Sign in to Amazon ECR
         id: ecr
@@ -82,7 +92,7 @@ jobs:
 
       # ---- everything below needs the ECS services etc. to exist ----
       - name: Download the current task definitions
-        if: ${{ !inputs.images_only }}
+        if: env.IMAGES_ONLY != 'true'
         run: |
           # AWS adds read-only fields when it shows a task definition; remove them so it can be registered again.
           for pair in web:${{ vars.ECS_TASK_FAMILY_WEB }} worker:${{ vars.ECS_TASK_FAMILY_WORKER }} migrate:${{ vars.ECS_TASK_FAMILY_MIGRATE }}; do
@@ -93,7 +103,7 @@ jobs:
           done
 
       - name: Put the new web image into the web task definition
-        if: ${{ !inputs.images_only }}
+        if: env.IMAGES_ONLY != 'true'
         id: render-web
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
@@ -102,7 +112,7 @@ jobs:
           image: ${{ steps.images.outputs.web }}
 
       - name: Put the new web image into the migrate task definition
-        if: ${{ !inputs.images_only }}
+        if: env.IMAGES_ONLY != 'true'
         id: render-migrate
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
@@ -111,7 +121,7 @@ jobs:
           image: ${{ steps.images.outputs.web }}
 
       - name: Put the new worker image into the worker task definition
-        if: ${{ !inputs.images_only }}
+        if: env.IMAGES_ONLY != 'true'
         id: render-worker
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
@@ -120,7 +130,7 @@ jobs:
           image: ${{ steps.images.outputs.worker }}
 
       - name: Run the database migrations (one-off task) and stop if they fail
-        if: ${{ !inputs.images_only }}
+        if: env.IMAGES_ONLY != 'true'
         env:
           TASK_FILE: ${{ steps.render-migrate.outputs.task-definition }}
         run: |
@@ -139,7 +149,7 @@ jobs:
           fi
 
       - name: Deploy the web service (rolling, no downtime)
-        if: ${{ !inputs.images_only }}
+        if: env.IMAGES_ONLY != 'true'
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-web.outputs.task-definition }}
@@ -148,7 +158,7 @@ jobs:
           wait-for-service-stability: true
 
       - name: Deploy the worker service
-        if: ${{ !inputs.images_only }}
+        if: env.IMAGES_ONLY != 'true'
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-worker.outputs.task-definition }}
@@ -157,7 +167,7 @@ jobs:
           wait-for-service-stability: true
 
       - name: Install Node.js 22
-        if: ${{ !inputs.images_only }}
+        if: env.IMAGES_ONLY != 'true'
         uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -165,7 +175,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Build the React app
-        if: ${{ !inputs.images_only }}
+        if: env.IMAGES_ONLY != 'true'
         working-directory: frontend
         env:
           VITE_API_URL: /api # same address as the shop: CloudFront sends /api/* to the load balancer
@@ -175,7 +185,7 @@ jobs:
           npm run build
 
       - name: Upload the React app to S3 and refresh CloudFront
-        if: ${{ !inputs.images_only }}
+        if: env.IMAGES_ONLY != 'true'
         env:
           BUCKET: ${{ vars.FRONTEND_BUCKET }}
         run: |
