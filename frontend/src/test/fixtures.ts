@@ -1,5 +1,27 @@
 import type { AuthContextValue } from '@/auth/context'
-import type { Category, Order, Paginated, Product, User, WishlistItem, WishlistProduct } from '@/types/api'
+import type {
+  Category,
+  Order,
+  Paginated,
+  Product,
+  ProductSuggestion,
+  User,
+  WishlistItem,
+  WishlistProduct,
+} from '@/types/api'
+
+/** A product in the search box's dropdown: makeSuggestion({ name: 'Bluetooth Speaker' }) */
+export function makeSuggestion(overrides: Partial<ProductSuggestion> = {}): ProductSuggestion {
+  return {
+    id: 21,
+    name: 'Noise-Cancelling Headphones',
+    slug: 'noise-cancelling-headphones',
+    price: '99.00',
+    image: null,
+    category: { id: 4, name: 'Electronics', slug: 'electronics' },
+    ...overrides,
+  }
+}
 
 /** Ana's pending order #15: one Chef Knife. makeOrder({ status: 'paid', status_display: 'Paid' }) */
 export function makeOrder(overrides: Partial<Order> = {}): Order {
@@ -88,6 +110,7 @@ export function makeProduct(overrides: Partial<Product> = {}): Product {
     category: { id: 2, name: 'Kitchen', slug: 'kitchen' },
     average_rating: null,
     review_count: 0,
+    search_snippet: null,
     created_at: '2026-09-27T15:19:22Z',
     updated_at: '2026-09-27T15:19:22Z',
     ...overrides,

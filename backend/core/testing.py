@@ -28,10 +28,11 @@ def make_category(name='Kitchen'):
     return Category.objects.create(name=name)
 
 
-def make_product(category, name='Blue Mug', price='12.50', stock=10, is_active=True):
+def make_product(category, name='Blue Mug', price='12.50', stock=10, is_active=True, description=''):
     return Product.objects.create(
         category=category,
         name=name,
+        description=description,
         price=Decimal(price),
         stock=stock,
         is_active=is_active,

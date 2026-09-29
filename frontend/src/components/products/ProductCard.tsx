@@ -1,6 +1,7 @@
 import { ImageOff } from 'lucide-react'
 import { Link } from 'react-router'
 
+import { HighlightedText } from '@/components/products/HighlightedText'
 import { StarRating } from '@/components/reviews/StarRating'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -42,6 +43,12 @@ export function ProductCard({ product }: { product: Product }) {
           <CardHeader>
             <p className="text-xs text-muted-foreground">{product.category.name}</p>
             <CardTitle className="line-clamp-2">{product.name}</CardTitle>
+            {/* While searching: the bit of the description that matched, with the words highlighted. */}
+            {product.search_snippet && (
+              <p className="line-clamp-2 text-xs text-muted-foreground">
+                <HighlightedText text={product.search_snippet} />
+              </p>
+            )}
           </CardHeader>
           <CardContent className="mt-auto">
             <p className="text-lg font-semibold">{formatPrice(product.price)}</p>

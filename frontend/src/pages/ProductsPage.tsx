@@ -1,4 +1,4 @@
-import { AlertCircle, PackageSearch } from 'lucide-react'
+import { AlertCircle, PackageSearch, SpellCheck } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 
 import { PRODUCTS_PAGE_SIZE } from '@/api/catalog'
@@ -50,6 +50,8 @@ export function ProductsPage() {
   }
 
   const totalPages = products.data ? Math.max(1, Math.ceil(products.data.count / PRODUCTS_PAGE_SIZE)) : 1
+  // The server's spelling suggestion for a search with typos, e.g. "headphnes" -> "headphones".
+  const didYouMean = products.data?.did_you_mean
 
   return (
     <div className="flex flex-col gap-6">
@@ -72,6 +74,21 @@ export function ProductsPage() {
         onClear={() => setSearchParams({}, { preventScrollReset: true })}
       />
 
+      {didYouMean && (
+        <p className="flex items-center gap-2 text-sm">
+          <SpellCheck className="size-4 text-muted-foreground" aria-hidden />
+          Did you mean{' '}
+          <button
+            type="button"
+            className="font-semibold underline underline-offset-4"
+            onClick={() => changeFilters({ search: didYouMean })}
+          >
+            {didYouMean}
+          </button>
+          ?
+        </p>
+      )}
+
       {products.isPending ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 6 }, (_, index) => (
@@ -90,7 +107,9 @@ export function ProductsPage() {
       ) : products.data.results.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-xl bg-card p-10 text-center ring-1 ring-foreground/10">
           <PackageSearch className="size-8 text-muted-foreground" />
-          <p className="font-medium">No products match your filters.</p>
+          <p className="font-medium">
+            {values.search ? `No products match "${values.search}".` : 'No products match your filters.'}
+          </p>
           <Button variant="outline" onClick={() => setSearchParams({})}>
             Clear filters
           </Button>

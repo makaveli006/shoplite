@@ -112,8 +112,23 @@ export interface Product {
   category: CategorySummary
   average_rating: number | null // e.g. 4.3; null while the product has no reviews
   review_count: number
+  // While searching: the description with matched words between \u0002 and \u0003 (see HighlightedText).
+  search_snippet: string | null
   created_at: string
   updated_at: string
+}
+
+/** A page of products; while searching it can also suggest a spelling ("headphones"). */
+export type ProductPage = Paginated<Product> & { did_you_mean?: string | null }
+
+/** GET /products/suggest/?q=: a small product for the search box's dropdown. */
+export interface ProductSuggestion {
+  id: number
+  name: string
+  slug: string
+  price: string
+  image: string | null
+  category: CategorySummary
 }
 
 /** POST /payments/start/: everything the Razorpay payment window needs for one order. */

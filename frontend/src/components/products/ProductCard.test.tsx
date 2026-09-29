@@ -38,6 +38,13 @@ describe('ProductCard', () => {
     expect(screen.getByRole('link')).not.toContainElement(heart) // a button inside a link is invalid HTML
   })
 
+  it('shows the matching part of the description while searching', () => {
+    const { container } = renderWithProviders(
+      <ProductCard product={makeProduct({ search_snippet: 'A 20 cm stainless steel chef \u0002knife\u0003.' })} />,
+    )
+    expect(container.querySelector('mark')).toHaveTextContent('knife')
+  })
+
   it('shows no stars for a product without reviews', () => {
     renderWithProviders(<ProductCard product={makeProduct()} />)
     expect(screen.queryByRole('img', { name: /Rated/ })).not.toBeInTheDocument()
