@@ -165,8 +165,15 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_TASK_IGNORE_RESULT = True  # we don't need to store what tasks return
 
 # Email. In development the "console" backend prints emails instead of sending them.
+# In production: EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend plus the
+# mail provider's server details below.
 EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'ShopLite <orders@shoplite.local>')
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'localhost')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+EMAIL_USE_TLS = env_bool('EMAIL_USE_TLS', True)
 
 # JSON Web Tokens (djangorestframework-simplejwt)
 SIMPLE_JWT = {
@@ -224,12 +231,29 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = 'static/'
+# "manage.py collectstatic" copies all static files (e.g. the Django admin's CSS) here,
+# so the web server can serve them in production.
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # User-uploaded files (product images)
 # MEDIA_ROOT: the folder on disk where uploads are saved.
 # MEDIA_URL: the URL prefix they are served under (/media/products/2026/09/mug.jpg).
 MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Production security. Only active when DEBUG is off (i.e. on a real server with HTTPS).
+# Check with:  manage.py check --deploy
+CSRF_TRUSTED_ORIGINS = env_list('DJANGO_CSRF_TRUSTED_ORIGINS')  # e.g. https://api.shoplite.example
+if not DEBUG:
+    SECURE_SSL_REDIRECT = env_bool('DJANGO_SECURE_SSL_REDIRECT', True)  # http:// -> https://
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')  # we run behind a proxy that handles HTTPS
+    SESSION_COOKIE_SECURE = True  # cookies only over HTTPS
+    CSRF_COOKIE_SECURE = True
+    # Tell browsers "always use HTTPS for this site". Start small (e.g. 3600) and raise
+    # to 31536000 (1 year) once HTTPS is confirmed to work everywhere.
+    SECURE_HSTS_SECONDS = int(os.getenv('DJANGO_SECURE_HSTS_SECONDS', '3600'))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool('DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS', False)
+    SECURE_HSTS_PRELOAD = False
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field

@@ -7405,3 +7405,161 @@ Next: Phase 16, wrap-up.
 - A production-readiness checklist: debug mode off, real secrets, serving the built frontend and uploaded images, a proper app server instead of runserver, HTTPS, and the 500 kB build warning.
 - The Django 5.1 → 5.2 LTS upgrade exercise, where your 53 autoke.
 - Ideas for what to build next.
+
+
+
+
+
+  Ran 3 shell commands
+
+Quick status: done. With the pages loaded on demand, the main frontend file dropped from 644 kB to 486 kB, so the warning is gone. All 12 frontend and 41 backend tests still pass. Here's the lesson.
+
+Phase 16, Lesson 16.1: Getting ready for production
+
+Phase 15 committed as e29fecd. Your run-through worked end to end: Dave's order #14 produced the confirmation email to dave@example.com in the worker's log. (The Missing script: "dev" in your output was npm run dev from the project root again, and you corrected it right away.)
+
+What & why
+
+Everything runs well on your laptop, in development mode. A real shop on the internet has different needs:
+- It must never show error details to visitors.
+- It must only work over HTTPS, the encrypted connection with the padlock in the address bar.
+- It needs real email, a proper web server instead of runserver, and a place for pictures and the built frontend.
+- It should load fast for customers.
+
+This lesson makes the code ready for that. The settings switch automatically when debug mode is off. It also explains what a real deployment still needs. Actually putting it on a server depends on the hosting company you choose, so we prepare everything that belongs in the code.
+
+What happens now
+
+When DJANGO_DEBUG=False (on a real server), Django automatically:
+- Sends every http:// visitor to https://, so passwords and tokens are never sent unencrypted.
+- Marks its cookies "HTTPS only" (used by the Django admin's login).
+- Tells browsers "only ever use HTTPS for this site" for a while. This is called HSTS. It starts at 1 hour on purpose: if HTTPS were misconfigured, a long value would lock visitors out. You raise it to a year once everything works.
+- Understands it sits behind a front server that handles the HTTPS part. That's the normal setup: a web server such as Nginx or Caddy in front, and Django behind it.
+- Shows plain error pages instead of the detailed yellow ones, as you saw in Lesson 2.3.
+
+On your laptop (DJANGO_DEBUG=True), none of this is switched on, so development works exactly as before.
+
+Django's own production check, manage.py check --deploy, now reports only two optional warnings:
+- "include subdomains"
+- "preload list"
+
+Both are deliberate choices you make once you own a real domain, so they're left as switches in the settings.
+
+Other new settings:
+- Real email: switching from "print it" to a real mail provider is now only a matter of settings in .env (server, port, user, password). backend\.env.example lists them in a clearly marked PRODUCTION ONLY section.
+- The trusted-sites list for the Django admin over HTTPS (DJANGO_CSRF_TRUSTED_ORIGINS): without it, the admin's login form would be refused on a real domain.
+- A collection folder for static files: in production, Django doesn't serve its own CSS and JavaScript (the admin's styling, the browsable API). One command, collectstatic, copies them all into backend\staticfiles\ for the front web server to serve. That folder is already ignored by Git.
+
+The frontend now loads in pieces:
+- Before, the build produced one 644 kB file: every page, including the admin screens and checkout, even for a visitor who only looks at products. That's what the "larger than 500 kB" note meant.
+- Now, the pages everyone sees (home, product list, product page) are in the main file, and every other page is its own small file, downloaded only the first time someone opens it.
+- The main file is now 486 kB, so the warning is gone. Customers never download the admin screens at all.
+- Opening a page for the first time costs one tiny extra download, usually unnoticeable. After that it's remembered like everything else.
+
+What a real deployment still needs
+
+This is the checklist you'd work through with a hosting provider:
+
+┌────────────────┬───────────────────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│      Part      │   Development (now)   │                                                Production                                                 │
+├────────────────┼───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Django         │ runserver             │ a production app server (Gunicorn) in a Docker container, built with uv like our worker (Lesson 8.2)      │
+├────────────────┼───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ HTTPS          │ none                  │ a front web server (Nginx or Caddy) with a certificate (free from Let's Encrypt)                          │
+├────────────────┼───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Frontend       │ Vite dev server       │ npm run build → the dist folder served by the front web server or a CDN, with the rule "unknown addresses │
+│                │                       │  → index.html" so React Router works (Lesson 11.1)                                                        │
+├────────────────┼───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Static files   │ served by runserver   │ collectstatic → served by the front web server                                                            │
+├────────────────┼───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Uploaded       │ backend\media\ on     │ cloud file storage (S3-compatible), because servers get replaced and disks are wiped                      │
+│ pictures       │ your disk             │                                                                                                           │
+├────────────────┼───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ PostgreSQL     │ Docker on your PC     │ a managed database with automatic backups                                                                 │
+├────────────────┼───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Redis + worker │ Docker on your PC     │ the same containers on the server (or a managed Redis)                                                    │
+├────────────────┼───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Secrets        │ backend\.env          │ the host's secret settings: a new secret key, strong database password, new admin password (never reuse   │
+│                │                       │ dev ones) , DJANGO_DEBUG=False                                                                            │
+├────────────────┼───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Addresses      │ localhost             │ real domains in DJANGO_ALLOWED_HOSTS, CORS_ALLOWED_ORIGINS, DJANGO_CSRF_TRUSTED_ORIGINS, and VITE_API_URL │
+├────────────────┼───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Email          │ printed in the worker │ a mail provider (SMTP settings)                                                                           │
+│                │  log                  │                                                                                                           │
+├────────────────┼───────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Each new       │ run by hand           │ migrate, collectstatic, and both test suites run automatically before going live                          │
+│ version        │                       │                                                                                                           │
+└────────────────┴───────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+What I changed
+
+- Backend settings: the HTTPS and security switches (active only without debug), the static-files collection folder, real-email settings, and the admin trusted-sites list. backend\.env.example documents the production values, commented out.
+- Frontend routes: every page except home, product list, and product page is loaded on demand. No page behaves differently.
+
+Tested: Django's normal check passes, the deploy check shows only the two optional warnings, 41 backend tests OK, the frontend build has no size warning, 12 frontend tests passed, and lint is clean.
+
+---
+
+▶️ Your turn
+
+Step 1: Django's production check
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+$env:DJANGO_DEBUG = "False"
+uv run python manage.py check --deploy
+Remove-Item Env:DJANGO_DEBUG
+You'll see only W005 (subdomains) and W021 (preload). If you like, compare with a brand-new Django project: check --deploy there lists around six problems, which our settings now handle.
+
+Step 2: Collect static files
+
+uv run python manage.py collectstatic --noinput
+Get-ChildItem staticfiles
+→ "… static files copied to '…\backend\staticfiles'", with folders admin and rest_framework inside. That's what a front web server would serve. Check that git status doesn't list staticfiles.
+
+Step 3: The frontend in pieces
+
+cd ..\frontend
+npm run build
+Several small files appear (AdminProductsPage-….js, CheckoutPage-….js, …), and no "larger than 500 kB" note.
+
+Then see it in the browser: npm run dev, sign in as admin, open F12 → Network → JS, and clear it. Click Admin in the header. A file for the admin screen is loaded at that moment. Click Categories, and another small one arrives. Click Products again, and nothing new loads, because it's already there.
+
+Step 4: Run both test suites
+
+npm test
+cd ..\backend
+uv run python manage.py test
+→ 12 passed, 41 OK.
+
+Step 5: Commit
+
+cd ..
+git add backend frontend
+git commit -m "Production readiness: HTTPS/security settings, collectstatic, SMTP settings; load pages on demand"
+
+---
+
+❓ If something goes wrong
+
+┌────────────────────────────────────────────────────┬───────────────────────────────────────────────────┬───────────────────────────────────────────┐
+│                    What you see                    │                        Why                        │                    Fix                    │
+├────────────────────────────────────────────────────┼───────────────────────────────────────────────────┼───────────────────────────────────────────┤
+│ The shop redirects to https://localhost and fails  │ DJANGO_DEBUG=False is still set in that window    │ Remove-Item Env:DJANGO_DEBUG and restart  │
+│                                                    │                                                   │ Django                                    │
+├────────────────────────────────────────────────────┼───────────────────────────────────────────────────┼───────────────────────────────────────────┤
+│ collectstatic asks "Are you sure?"                 │ --noinput was left out                            │ Type yes, or add --noinput                │
+├────────────────────────────────────────────────────┼───────────────────────────────────────────────────┼───────────────────────────────────────────┤
+│ A page shows a blank area for a moment the very    │ Its file is being downloaded (on a very slow      │ Normal; it's remembered afterwards        │
+│ first time                                         │ connection)                                       │                                           │
+└────────────────────────────────────────────────────┴───────────────────────────────────────────────────┴───────────────────────────────────────────┘
+
+---
+
+✅ Checkpoint
+
+Tell me:
+1. the warnings from Step 1,
+2. how many static files were copied in Step 2, and
+3. whether Step 3 showed a new file loading when you opened the admin.
+
+Next: Lesson 16.2, the final lesson. Upgrading Django from 5.1.7 to 5.2 LTS (Long-Term Support, which gets security fixes for years), with uv. I've already checked it: all 41 backend tests pass on Django 5.2.17, and the helper libraries move forward too. After that comes a review of everything you've built and learned, and ideas for what to build next.
