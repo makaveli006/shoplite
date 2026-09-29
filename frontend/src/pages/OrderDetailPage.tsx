@@ -1,10 +1,12 @@
 import { isAxiosError } from 'axios'
 import { CheckCircle2, PackageX, Star } from 'lucide-react'
+import { useEffect } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 
 import { useAuth } from '@/auth/useAuth'
 import { CancelOrderButton } from '@/components/orders/CancelOrderButton'
 import { OrderStatusBadge } from '@/components/orders/OrderStatusBadge'
+import { PayButton } from '@/components/orders/PayButton'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
@@ -15,10 +17,26 @@ import { formatPrice } from '@/lib/format'
 
 export function OrderDetailPage() {
   const { id } = useParams()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const justPlaced = searchParams.get('placed') === '1'
+  // "?pay=1": the checkout page sends customers here to pay straight away.
+  const payNow = searchParams.get('pay') === '1'
   const order = useOrder(Number(id))
   const { user } = useAuth()
+
+  // Take "pay=1" out of the address once it has been used, so a refresh or Back
+  // doesn't open the payment window again.
+  useEffect(() => {
+    if (payNow && order.data) {
+      setSearchParams(
+        (params) => {
+          params.delete('pay')
+          return params
+        },
+        { replace: true },
+      )
+    }
+  }, [payNow, order.data, setSearchParams])
 
   if (order.isPending) {
     return <Skeleton className="h-96 w-full" />
@@ -40,8 +58,11 @@ export function OrderDetailPage() {
 
   const data = order.data
   const placedOn = new Date(data.created_at).toLocaleString(undefined, { dateStyle: 'long', timeStyle: 'short' })
+  const isMine = data.customer_email === user?.email // staff also see other customers' orders
   // Delivered items can be reviewed, by the customer who ordered them (not by staff looking at the order).
-  const canReview = data.status === 'delivered' && data.customer_email === user?.email
+  const canReview = data.status === 'delivered' && isMine
+  // Only the customer pays or cancels a pending order here; staff use Admin → Orders.
+  const awaitingPayment = data.status === 'pending' && isMine
 
   return (
     <div className="flex flex-col gap-6">
@@ -52,7 +73,11 @@ export function OrderDetailPage() {
           <CheckCircle2 className="mt-0.5 size-5 shrink-0" />
           <div>
             <p className="font-semibold">Thank you! Your order #{data.id} has been placed.</p>
-            <p className="text-sm">A confirmation email is on its way to {data.customer_email}.</p>
+            <p className="text-sm">
+              {data.status === 'pending' && 'Complete the payment to confirm it. '}
+              {data.status === 'paid' && 'Your payment was received. '}A confirmation email is on its way to{' '}
+              {data.customer_email}.
+            </p>
           </div>
         </div>
       )}
@@ -129,8 +154,12 @@ export function OrderDetailPage() {
         <Link to="/orders" className="text-sm underline underline-offset-4">
           See all my orders
         </Link>
-        {/* Only the customer who placed it cancels here; staff use Admin → Orders. */}
-        {data.status === 'pending' && data.customer_email === user?.email && <CancelOrderButton orderId={data.id} />}
+        {awaitingPayment && (
+          <div className="flex flex-wrap items-center gap-2">
+            <CancelOrderButton orderId={data.id} />
+            <PayButton order={data} autoOpen={payNow} />
+          </div>
+        )}
       </div>
     </div>
   )

@@ -69,6 +69,17 @@ Everything comes from env vars via the `env_bool` / `env_list` helpers in `confi
 - **`ProductCard` layout:** it is a `div.relative` wrapping the `<Link>` card, with `WishlistButton` as a sibling positioned over it. Never put buttons inside the link.
 - **Main bundle size:** the product page's reviews section (`components/reviews/ProductReviews.tsx`) is `React.lazy`-loaded to keep the main bundle under Vite's 500 kB warning.
 
+### Payments (`payments` app, Razorpay test mode)
+- **Git rule:** this work lives on the branch `feature/payment-gateway`, with draft PR #1. Never merge it into `main` (or commit/push to `main`) without the developer's explicit permission.
+- **Gateway:** `payments/gateway.py` is the only code that talks to Razorpay (`create_razorpay_order`) or knows its signature formulas: HMAC-SHA256 with `hmac.compare_digest`; payment receipts sign `order_id|payment_id` with the key secret, and webhooks sign the **raw body** with the webhook secret. Tests mock `payments.gateway.create_razorpay_order` and sign with dummy secrets via `override_settings(**PAYMENT_SETTINGS)`; they never reach Razorpay.
+- **Money:** amounts are integers in paise (`services.amount_in_paise`, exact via `Decimal`) and always come from the database, never from the browser. The currency is `SHOP_CURRENCY` (default INR; keep `VITE_CURRENCY` equal).
+- **Starting a payment:** `start_payment(order)` requires a pending order of at least ₹1 and reuses a waiting (`created`/`failed`) `Payment` with the same amount.
+- **Two confirmations, one effect:** `POST payments/verify/` (the browser forwards the Checkout receipt; `via='checkout'`) and `POST payments/webhook/` (`AllowAny`, `authentication_classes = []`; `payment.captured`/`order.paid` → paid, `payment.failed` → failed; `via='webhook'`) both call `services.mark_paid()`. It locks the `Payment`, is a no-op if already paid, refuses a mismatched amount, and only calls `orders.services.change_status(PAID)` (which queues the "Payment received" email) while the order is pending. Paid-but-cancelled is logged and shown as `needs_refund` in the admin.
+- **Webhook dedup:** `WebhookEvent` (unique `x-razorpay-event-id`) is created in a savepoint inside the same transaction as the handling. A duplicate returns 200 "already handled"; a handling error rolls back the record so Razorpay's retry works.
+- **Settings:** `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET` come from `backend/.env` (never print them); `PAYMENTS_ENABLED` is false without keys, and then start returns 503.
+- **Frontend:** `lib/razorpay.ts` loads `checkout.js` once, on demand. `hooks/usePayment.ts` runs start → open window → verify. `components/orders/PayButton.tsx` is shown on `OrderDetailPage` for the owner's pending order. Checkout navigates to `/orders/:id?placed=1&pay=1`, which auto-opens the window once and strips `pay=1`.
+- **Dev webhooks:** they arrive through a zrok tunnel (`zrok2 share public http://localhost:8000 -n public:shoplitesubin` → `https://shoplitesubin.shares.zrok.io/api/payments/webhook/`); that host must be in `DJANGO_ALLOWED_HOSTS`.
+
 ### Emails
 - **Sending:** every email goes through `core.emails.send_email()`. It renders `backend/templates/emails/<name>.txt` and `.html` (both are required) and sends them as one multipart message.
 - **Templates:** the HTML templates extend `emails/base.html` and reuse `_items`, `_address` and `_button`. They use tables and inline styles only, because mail clients ignore most CSS. The `.txt` templates wrap their content in `{% autoescape off %}`.
@@ -95,7 +106,9 @@ Emails sent by a task that the test calls directly land in `mail.outbox`. Celery
   - Mock the API module (`vi.mock('@/api/catalog', ...)`).
   - Render with `renderWithProviders(ui, { route, auth })` from `src/test/render.tsx`. It supplies Query, the router and an `AuthContext`, signed out by default; pass `auth: signedIn()` from `src/test/fixtures.ts` for a signed-in customer.
   - Anything that calls `useAuth()` needs this, because it throws without a provider.
-  - Data builders: `makeProduct`, `makeUser`, `makeWishlistItem`, `page`.
+  - Data builders: `makeProduct`, `makeUser`, `makeOrder`, `makeWishlistItem`, `page`.
+  - The providers are passed as a `wrapper`, so `rerender()` keeps them.
+  - Browser-only globals (`window.Razorpay`) are faked with a small class that records its options (see `PayButton.test.tsx`).
 
 ## Conventions
 - Code comments are plain-English explanations of *why* (this is a learning project); match that style.

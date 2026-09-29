@@ -116,6 +116,18 @@ export interface Product {
   updated_at: string
 }
 
+/** POST /payments/start/: everything the Razorpay payment window needs for one order. */
+export interface PaymentStart {
+  key_id: string // public key id (rzp_test_... in test mode)
+  razorpay_order_id: string
+  amount: number // in paise: ₹49.99 = 4999
+  currency: string
+  name: string
+  description: string
+  prefill: { name: string; email: string; contact: string }
+  test_mode: boolean
+}
+
 /** The product details a wishlist item carries (a smaller version of Product). */
 export interface WishlistProduct {
   id: number

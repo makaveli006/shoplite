@@ -11,7 +11,8 @@ from .testing import TemporaryMediaMixin, make_category, make_picture, make_prod
 
 class FormatMoneyTests(SimpleTestCase):
     def test_known_currencies_use_their_symbol(self):
-        self.assertEqual(format_money(Decimal('1234.5')), '$1,234.50')
+        with override_settings(SHOP_CURRENCY='USD'):
+            self.assertEqual(format_money(Decimal('1234.5')), '$1,234.50')
         with override_settings(SHOP_CURRENCY='INR'):
             self.assertEqual(format_money('49.99'), '₹49.99')
 

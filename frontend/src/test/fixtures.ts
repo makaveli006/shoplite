@@ -1,5 +1,36 @@
 import type { AuthContextValue } from '@/auth/context'
-import type { Category, Paginated, Product, User, WishlistItem, WishlistProduct } from '@/types/api'
+import type { Category, Order, Paginated, Product, User, WishlistItem, WishlistProduct } from '@/types/api'
+
+/** Ana's pending order #15: one Chef Knife. makeOrder({ status: 'paid', status_display: 'Paid' }) */
+export function makeOrder(overrides: Partial<Order> = {}): Order {
+  return {
+    id: 15,
+    status: 'pending',
+    status_display: 'Pending',
+    total_amount: '49.99',
+    items: [
+      {
+        id: 1,
+        product: 7,
+        product_slug: 'chef-knife',
+        product_name: 'Chef Knife',
+        unit_price: '49.99',
+        quantity: 1,
+        line_total: '49.99',
+      },
+    ],
+    customer_email: 'ana@example.com',
+    full_name: 'Ana Silva',
+    address: '1 Tea Street',
+    city: 'Kochi',
+    postal_code: '682001',
+    country: 'India',
+    phone: '9876543210',
+    created_at: '2026-09-29T09:00:00Z',
+    updated_at: '2026-09-29T09:00:00Z',
+    ...overrides,
+  }
+}
 
 export function makeUser(overrides: Partial<User> = {}): User {
   return {

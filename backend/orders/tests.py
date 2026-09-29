@@ -5,7 +5,7 @@ from unittest import mock
 
 from django.core import mail
 from django.db import connection
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, override_settings
 from rest_framework.test import APITestCase
 
 from cart.models import CartItem
@@ -152,6 +152,7 @@ class OrderManagementTests(APITestCase):
         self.assertEqual(self.admin_client.get('/api/orders/', {'search': 'ana@'}).data['count'], 0)
 
 
+@override_settings(SHOP_CURRENCY='INR')  # prices in the emails: ₹49.99, whatever backend/.env says
 class OrderEmailTests(TemporaryMediaMixin, APITestCase):
     def setUp(self):
         self.kitchen = make_category('Kitchen')
@@ -174,7 +175,7 @@ class OrderEmailTests(TemporaryMediaMixin, APITestCase):
         email = mail.outbox[0]
         self.assertEqual(email.to, ['bob@example.com'])
         self.assertEqual(email.subject, f'Order #{order_id} confirmed')
-        self.assertIn('1 x Chef Knife @ $49.99', email.body)
+        self.assertIn('1 x Chef Knife @ ₹49.99', email.body)
         html, mimetype = email.alternatives[0]
         self.assertEqual(mimetype, 'text/html')
         self.assertIn('Chef Knife', html)
