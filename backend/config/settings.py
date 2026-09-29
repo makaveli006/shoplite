@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     'django_filters',
     'corsheaders',
     # Our apps
+    'core',  # shared helpers; an app so its management commands (preview_emails) and tests are found
     'accounts',
     'catalog',
     'cart',
@@ -88,7 +89,7 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],  # shared templates, e.g. templates/emails/
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -182,6 +183,9 @@ EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = env_bool('EMAIL_USE_TLS', True)
+
+# Currency shown in emails ($12.50). Keep it the same as VITE_CURRENCY in frontend/.env.
+SHOP_CURRENCY = os.getenv('SHOP_CURRENCY', 'USD').upper()
 
 # JSON Web Tokens (djangorestframework-simplejwt)
 SIMPLE_JWT = {

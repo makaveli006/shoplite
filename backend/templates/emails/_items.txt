@@ -1,0 +1,3 @@
+{% autoescape off %}{% for item in items %}  {{ item.quantity }} x {{ item.name }} @ {{ item.unit_price }} = {{ item.line_total }}
+{% endfor %}
+  Total: {{ total }}{% endautoescape %}

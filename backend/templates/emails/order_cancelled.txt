@@ -1,0 +1,10 @@
+{% autoescape off %}Hi {{ order.full_name }},
+
+{% if cancelled_by_customer %}As you asked, we have cancelled your order #{{ order.pk }}.{% else %}We are sorry, but we had to cancel your order #{{ order.pk }}. If you have any questions, just reply to this email.{% endif %}
+
+{% include "emails/_items.txt" %}
+
+View your order: {{ order_url }}
+
+{{ site_name }}
+{% endautoescape %}

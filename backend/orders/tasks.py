@@ -1,8 +1,20 @@
 from celery import shared_task
-from django.conf import settings
-from django.core.mail import send_mail
 
+from core.emails import InlineImages, send_email
+
+from .emails import order_email_context
 from .models import Order
+
+# The emails a customer can get about an order: kind -> (subject, template in templates/emails/).
+# Apart from 'confirmation', the kinds are Order.Status values: change_status() sends the email
+# of the new status, if there is one here.
+ORDER_EMAILS = {
+    'confirmation': ('Order #{id} confirmed', 'order_confirmation'),
+    Order.Status.PAID: ('Payment received for order #{id}', 'order_paid'),
+    Order.Status.SHIPPED: ('Your order #{id} has shipped', 'order_shipped'),
+    Order.Status.DELIVERED: ('Your order #{id} was delivered', 'order_delivered'),
+    Order.Status.CANCELLED: ('Your order #{id} was cancelled', 'order_cancelled'),
+}
 
 
 @shared_task(
@@ -10,33 +22,20 @@ from .models import Order
     retry_backoff=True,  # wait 1s, 2s, 4s ... between attempts
     max_retries=5,
 )
-def send_order_confirmation(order_id):
-    """Email the customer a summary of their new order. Runs in the Celery worker."""
-    order = Order.objects.select_related('user').prefetch_related('items').get(pk=order_id)
+def send_order_email(order_id, kind, cancelled_by_customer=False):
+    """Email the customer about their order (see ORDER_EMAILS). Runs in the Celery worker.
 
-    lines = [f'  {item.quantity} x {item.product_name} @ {item.unit_price} = {item.line_total}' for item in order.items.all()]
-    message = '\n'.join([
-        f'Hi {order.full_name},',
-        '',
-        f'Thank you for your order #{order.pk}! We have received it and will let you know when it ships.',
-        '',
-        *lines,
-        '',
-        f'  Total: {order.total_amount}',
-        '',
-        'Shipping to:',
-        f'  {order.full_name}',
-        f'  {order.address}',
-        f'  {order.postal_code} {order.city}',
-        f'  {order.country}',
-        '',
-        'ShopLite',
-    ])
+    cancelled_by_customer only changes the wording of the 'cancelled' email.
+    """
+    subject, template = ORDER_EMAILS[kind]
+    order = Order.objects.select_related('user').prefetch_related('items__product').get(pk=order_id)
 
-    send_mail(
-        subject=f'ShopLite order #{order.pk} confirmation',
-        message=message,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[order.user.email],
+    images = InlineImages()
+    send_email(
+        to=order.user.email,
+        subject=subject.format(id=order.pk),
+        template=template,
+        context={**order_email_context(order, images), 'cancelled_by_customer': cancelled_by_customer},
+        images=images,
     )
-    return f'Confirmation for order #{order.pk} sent to {order.user.email}'
+    return f'Order #{order.pk} {kind} email sent to {order.user.email}'

@@ -13,7 +13,7 @@ Customers browse products, fill a cart and check out; staff manage products, cat
 - **Cart**: server-side cart per customer, with stock checks
 - **Checkout**: turns the cart into an order in one database transaction; stock is locked so two customers can't buy the last item at the same time
 - **Orders**: status lifecycle (pending → paid → shipped → delivered, or cancelled), customers can cancel pending orders, cancelling returns the stock
-- **Background emails**: order confirmations and reset links are sent by a Celery worker, so the website never waits for the mail server
+- **HTML emails with product pictures**: order confirmation, payment received, shipped, delivered, cancelled, and password reset, each with a plain-text version. They are sent by a Celery worker, so the website never waits for the mail server
 - **Admin area** in the React app (and the Django admin): product create/edit with image upload, categories, all orders with status changes
 - **Permissions enforced by the API**, not only hidden in the UI: customers get `403` on every admin action
 - **Tests**: Django tests for the API and the frontend tested with Vitest + React Testing Library, run on every push by GitHub Actions
@@ -139,6 +139,15 @@ docker compose logs -f worker
 
 To send real emails, set the SMTP settings in `backend\.env` (see the comments in `backend\.env.example`),
 then restart Django and the worker (`docker compose restart worker`).
+
+To look at every email design in the browser without sending anything:
+
+```powershell
+cd backend
+uv run python manage.py preview_emails            # uses the newest order; or --order 12
+```
+
+It saves the files in `backend/email-previews/` and prints a link to each one.
 
 ## Running the tests
 

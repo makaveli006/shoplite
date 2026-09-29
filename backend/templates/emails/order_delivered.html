@@ -1,0 +1,14 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}Your order #{{ order.pk }} was delivered. We hope you enjoy it!{% endblock %}
+
+{% block content %}
+<h1 style="margin:0 0 12px 0;font-size:22px;line-height:30px;color:#171717;">Your order was delivered</h1>
+<p style="margin:0;">
+  Hi {{ order.full_name }}, your order <strong style="color:#171717;">#{{ order.pk }}</strong> was delivered.
+  We hope you enjoy it, and thank you for shopping with {{ site_name }}!
+</p>
+
+{% include "emails/_items.html" %}
+{% include "emails/_button.html" with url=shop_url label="Shop again" %}
+{% endblock %}

@@ -56,8 +56,20 @@ Everything comes from env vars via the `env_bool` / `env_list` helpers in `confi
 - The allowed transitions are **mirrored in the frontend** (the next-step buttons in `frontend/src/pages/admin/AdminOrdersPage.tsx`); keep both in sync.
 - Catalog resources are looked up by `slug`. Deleting a category that still has products returns 409 (`ProtectedError`). The category list is annotated with `product_count` and is not paginated.
 
+### Emails
+- **Sending:** every email goes through `core.emails.send_email()`. It renders `backend/templates/emails/<name>.txt` and `.html` (both are required) and sends them as one multipart message.
+- **Templates:** the HTML templates extend `emails/base.html` and reuse `_items`, `_address` and `_button`. They use tables and inline styles only, because mail clients ignore most CSS. The `.txt` templates wrap their content in `{% autoescape off %}`.
+- **Product pictures:** they are inline CID attachments, built by `InlineImages`: small JPEG thumbnails made with Pillow, and a letter placeholder when a product has no picture. They aren't URLs, because Gmail can't load `localhost` images.
+- **Order emails:** they are the `ORDER_EMAILS` table in `orders/tasks.py` (`'confirmation'` plus the `Order.Status` values except pending), sent by `send_order_email(order_id, kind, cancelled_by_customer=False)`. `place_order()` and `change_status()` queue them via `transaction.on_commit(..., robust=True)`, so every status-change path (API, customer cancel, Django admin actions) emails the customer.
+- **Previews:** `uv run python manage.py preview_emails [--order ID]` writes every design to `backend/email-previews/` (git-ignored) and sends nothing.
+
 ### Backend tests
-Each app has a `tests.py` using the helpers in `core/testing.py` (`make_user`, `make_category`, `make_product`, `client_for(user)` which uses `force_authenticate`, shared `PASSWORD`). Celery tasks are never really queued in tests: patch `.delay` **where it is imported**, e.g. `mock.patch('accounts.views.send_password_reset_email.delay')`. The password-reset rate limit is counted in the cache, so those tests call `cache.clear()` in `setUp`.
+Each app has a `tests.py` using the helpers in `core/testing.py`:
+- `make_user`, `make_category`, `make_product`, the shared `PASSWORD`
+- `client_for(user)`, which uses `force_authenticate`
+- `make_picture()`, plus `TemporaryMediaMixin`: put it first in a test class's bases so saved files go to a temporary `MEDIA_ROOT`
+
+Emails sent by a task that the test calls directly land in `mail.outbox`. Celery tasks are never really queued in tests: patch `.delay` **where it is imported**, e.g. `mock.patch('accounts.views.send_password_reset_email.delay')`. The password-reset rate limit is counted in the cache, so those tests call `cache.clear()` in `setUp`.
 
 ### Frontend data flow
 - `src/lib/api.ts` has the single Axios instance. The request interceptor attaches the Bearer token. The response interceptor handles a 401 with a **single-flight** refresh (one refresh shared by all concurrent failures, each request retried once), then calls the session-expired handler registered by `auth/AuthProvider.tsx`. It also has error helpers (`getErrorMessage`, `getFieldErrors`) that read DRF error shapes.

@@ -141,8 +141,17 @@ class PasswordResetTests(APITestCase):
         send_password_reset_email(*queue_email.call_args.args)  # run the job directly, no worker needed
 
         self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(mail.outbox[0].to, ['ana@example.com'])
-        uid, token = re.search(r'/reset-password/([^/\s]+)/([^/\s]+)', mail.outbox[0].body).groups()
+        email = mail.outbox[0]
+        self.assertEqual(email.to, ['ana@example.com'])
+        self.assertEqual(email.subject, 'Reset your ShopLite password')
+        # The same link is in the HTML version, behind the button.
+        link = queue_email.call_args.args[1]
+        html, mimetype = email.alternatives[0]
+        self.assertEqual(mimetype, 'text/html')
+        self.assertIn(f'href="{link}"', html)
+        self.assertIn('Choose a new password', html)
+
+        uid, token = re.search(r'/reset-password/([^/\s]+)/([^/\s]+)', email.body).groups()
         self.assertEqual(self.confirm(uid, token).status_code, 200)
 
     def test_new_password_works_and_link_only_works_once(self):

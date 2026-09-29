@@ -1,0 +1,30 @@
+{% comment %}
+The lines of an order: picture (or a letter placeholder), name, quantity x price, line total,
+and the order total. Needs `items` and `total` from orders.emails.order_email_context().
+{% endcomment %}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:24px 0 8px 0;border-top:1px solid #e4e4e7;">
+  {% for item in items %}
+  <tr>
+    <td width="64" style="padding:16px 16px 16px 0;border-bottom:1px solid #e4e4e7;vertical-align:top;">
+      {% if item.image_src %}
+      <img src="{{ item.image_src }}" width="64" height="64" alt="{{ item.name }}" style="display:block;width:64px;height:64px;border:0;border-radius:8px;">
+      {% else %}
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td width="64" height="64" align="center" valign="middle" style="width:64px;height:64px;border-radius:8px;background-color:#f4f4f5;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:24px;font-weight:bold;color:#a1a1aa;">{{ item.initial }}</td>
+        </tr>
+      </table>
+      {% endif %}
+    </td>
+    <td style="padding:16px 0;border-bottom:1px solid #e4e4e7;vertical-align:top;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:22px;">
+      {% if item.url %}<a href="{{ item.url }}" style="color:#171717;font-weight:bold;text-decoration:none;">{{ item.name }}</a>{% else %}<span style="color:#171717;font-weight:bold;">{{ item.name }}</span>{% endif %}<br>
+      <span style="font-size:14px;color:#71717a;">{{ item.quantity }} &times; {{ item.unit_price }}</span>
+    </td>
+    <td align="right" style="padding:16px 0 16px 16px;border-bottom:1px solid #e4e4e7;vertical-align:top;white-space:nowrap;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:22px;color:#171717;">{{ item.line_total }}</td>
+  </tr>
+  {% endfor %}
+  <tr>
+    <td colspan="2" style="padding:16px 0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:bold;color:#171717;">Total</td>
+    <td align="right" style="padding:16px 0 16px 16px;white-space:nowrap;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:17px;font-weight:bold;color:#171717;">{{ total }}</td>
+  </tr>
+</table>

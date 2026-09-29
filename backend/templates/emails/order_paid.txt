@@ -1,0 +1,10 @@
+{% autoescape off %}Hi {{ order.full_name }},
+
+We have received the payment for your order #{{ order.pk }} and are getting it ready to ship. We will email you again when it is on its way.
+
+{% include "emails/_items.txt" %}
+
+View your order: {{ order_url }}
+
+{{ site_name }}
+{% endautoescape %}

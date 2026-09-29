@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+{% comment %}
+The layout every HTML email shares. Emails are built with tables and inline styles on
+purpose: many mail apps (Gmail, Outlook) ignore CSS files, most <style> rules, and modern
+layout like flexbox, but they all understand tables and style="...".
+{% endcomment %}
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{{ subject }}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f4f4f5;">
+  {# The preview line mail apps show next to the subject. Hidden in the email itself. #}
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">{% block preheader %}{% endblock %}</div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f4f5;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;">
+          <tr>
+            <td style="padding:0 4px 20px 4px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:22px;font-weight:bold;letter-spacing:-0.5px;">
+              <a href="{{ frontend_url }}" style="color:#171717;text-decoration:none;">{{ site_name }}</a>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#ffffff;border:1px solid #e4e4e7;border-radius:10px;padding:32px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:24px;color:#3f3f46;">
+              {% block content %}{% endblock %}
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:24px 4px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:18px;color:#71717a;">
+              {% block footer %}You are receiving this email because you have an account at {{ site_name }}.{% endblock %}<br>
+              &copy; {{ year }} {{ site_name }}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

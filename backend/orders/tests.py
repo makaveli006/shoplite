@@ -1,3 +1,4 @@
+import os
 import threading
 from decimal import Decimal
 from unittest import mock
@@ -9,18 +10,18 @@ from rest_framework.test import APITestCase
 
 from cart.models import CartItem
 from catalog.models import Product
-from core.testing import client_for, make_category, make_product, make_user
+from core.testing import TemporaryMediaMixin, client_for, make_category, make_picture, make_product, make_user
 
 from .models import Order
-from .tasks import send_order_confirmation
+from .tasks import send_order_email
 
 SHIPPING = {
     'full_name': 'Bob Builder', 'address': '5 Hammer Lane', 'city': 'Test City',
     'postal_code': '12345', 'country': 'Testland',
 }
 
-# In tests the confirmation email must never really be queued in Redis.
-QUEUE_EMAIL = 'orders.services.send_order_confirmation.delay'
+# In tests the order emails must never really be queued in Redis.
+QUEUE_EMAIL = 'orders.services.send_order_email.delay'
 
 
 def stock_of(product):
@@ -55,7 +56,7 @@ class CheckoutTests(APITestCase):
         self.assertEqual(stock_of(self.knife), 3)
         self.assertEqual(stock_of(self.mug), 17)
         self.assertFalse(CartItem.objects.filter(cart__user=self.bob).exists())
-        queue_email.assert_called_once_with(response.data['id'])
+        queue_email.assert_called_once_with(response.data['id'], 'confirmation')
 
     def test_order_keeps_its_price_when_the_product_price_changes(self):
         with mock.patch(QUEUE_EMAIL):
@@ -151,23 +152,127 @@ class OrderManagementTests(APITestCase):
         self.assertEqual(self.admin_client.get('/api/orders/', {'search': 'ana@'}).data['count'], 0)
 
 
-class ConfirmationEmailTests(APITestCase):
-    def test_email_contains_order_summary(self):
-        bob = make_user('bob@example.com')
-        knife = make_product(make_category('Kitchen'), 'Chef Knife', '49.99', stock=5)
-        client = client_for(bob)
-        client.post('/api/cart/items/', {'product_id': knife.id}, format='json')
+class OrderEmailTests(TemporaryMediaMixin, APITestCase):
+    def setUp(self):
+        self.kitchen = make_category('Kitchen')
+        self.knife = make_product(self.kitchen, 'Chef Knife', '49.99')  # no picture
+
+    def place_order(self, *products):
+        client = client_for(make_user('bob@example.com'))
+        for product in products:
+            client.post('/api/cart/items/', {'product_id': product.id}, format='json')
         with mock.patch(QUEUE_EMAIL):
-            order_id = client.post('/api/orders/checkout/', SHIPPING, format='json').data['id']
+            return client.post('/api/orders/checkout/', SHIPPING, format='json').data['id']
+
+    def test_confirmation_has_a_text_and_an_html_version(self):
+        order_id = self.place_order(self.knife)
 
         # Run the job directly (no worker needed). In tests Django collects emails in mail.outbox.
-        send_order_confirmation(order_id)
+        send_order_email(order_id, 'confirmation')
 
         self.assertEqual(len(mail.outbox), 1)
         email = mail.outbox[0]
         self.assertEqual(email.to, ['bob@example.com'])
-        self.assertIn(f'#{order_id}', email.subject)
-        self.assertIn('1 x Chef Knife @ 49.99', email.body)
+        self.assertEqual(email.subject, f'Order #{order_id} confirmed')
+        self.assertIn('1 x Chef Knife @ $49.99', email.body)
+        html, mimetype = email.alternatives[0]
+        self.assertEqual(mimetype, 'text/html')
+        self.assertIn('Chef Knife', html)
+        self.assertIn(f'/orders/{order_id}', html)  # the "View your order" button
+
+    def test_product_pictures_travel_inside_the_email(self):
+        teapot = make_product(self.kitchen, 'Ceramic Teapot', '27.50')
+        teapot.image.save('teapot.png', make_picture())
+
+        send_order_email(self.place_order(teapot, self.knife), 'confirmation')
+
+        email = mail.outbox[0]
+        html = email.alternatives[0][0]
+        self.assertEqual(email.mixed_subtype, 'related')
+        self.assertEqual([picture['Content-ID'] for picture in email.attachments], [f'<product-{teapot.pk}>'])
+        self.assertIn(f'src="cid:product-{teapot.pk}"', html)
+        self.assertIn('#a1a1aa;">C</td>', html)  # the knife has no picture: letter placeholder
+        email.message().as_bytes()  # the complete message can be built
+
+    def test_missing_picture_file_does_not_stop_the_email(self):
+        teapot = make_product(self.kitchen, 'Ceramic Teapot', '27.50')
+        teapot.image.save('teapot.png', make_picture())
+        order_id = self.place_order(teapot)
+        os.remove(teapot.image.path)
+
+        with self.assertLogs('core.emails', 'WARNING'):
+            send_order_email(order_id, 'confirmation')
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].attachments, [])
+
+
+class StatusEmailTests(APITestCase):
+    """Every status change except back to pending emails the customer, once, after it is saved."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.knife = make_product(make_category('Kitchen'), 'Chef Knife', '49.99', stock=5)
+        cls.bob = make_user('bob@example.com')
+        cls.admin = make_user('admin@example.com', is_staff=True)
+
+    def setUp(self):
+        self.bob_client = client_for(self.bob)
+        self.admin_client = client_for(self.admin)
+        self.bob_client.post('/api/cart/items/', {'product_id': self.knife.id}, format='json')
+        with mock.patch(QUEUE_EMAIL):
+            self.order_id = self.bob_client.post('/api/orders/checkout/', SHIPPING, format='json').data['id']
+
+    def queued_email(self, change):
+        """Make a change and return the email jobs it queued (after the database commit)."""
+        with mock.patch(QUEUE_EMAIL) as queue_email, self.captureOnCommitCallbacks(execute=True):
+            response = change()
+        return response, queue_email.call_args_list
+
+    def set_status(self, status):
+        return self.admin_client.patch(f'/api/orders/{self.order_id}/status/', {'status': status}, format='json')
+
+    def test_each_admin_step_queues_its_email(self):
+        for status in ['paid', 'shipped', 'delivered']:
+            response, calls = self.queued_email(lambda: self.set_status(status))
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(calls, [mock.call(self.order_id, status, cancelled_by_customer=False)])
+
+    def test_refused_change_queues_nothing(self):
+        response, calls = self.queued_email(lambda: self.set_status('delivered'))  # can't skip steps
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(calls, [])
+
+    def test_cancel_email_knows_who_cancelled(self):
+        response, calls = self.queued_email(lambda: self.bob_client.post(f'/api/orders/{self.order_id}/cancel/'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls, [mock.call(self.order_id, 'cancelled', cancelled_by_customer=True)])
+
+    def test_admin_cancel_email(self):
+        _, calls = self.queued_email(lambda: self.set_status('cancelled'))
+        self.assertEqual(calls, [mock.call(self.order_id, 'cancelled', cancelled_by_customer=False)])
+
+    def test_each_email_has_its_subject_and_both_versions(self):
+        subjects = {
+            'paid': f'Payment received for order #{self.order_id}',
+            'shipped': f'Your order #{self.order_id} has shipped',
+            'delivered': f'Your order #{self.order_id} was delivered',
+            'cancelled': f'Your order #{self.order_id} was cancelled',
+        }
+        for kind, subject in subjects.items():
+            send_order_email(self.order_id, kind)  # run the job directly
+            email = mail.outbox[-1]
+            self.assertEqual(email.subject, subject)
+            self.assertEqual(email.to, ['bob@example.com'])
+            self.assertIn('Chef Knife', email.body)
+            self.assertIn('Chef Knife', email.alternatives[0][0])
+
+    def test_cancelled_wording_depends_on_who_cancelled(self):
+        send_order_email(self.order_id, 'cancelled', cancelled_by_customer=True)
+        send_order_email(self.order_id, 'cancelled')
+        by_customer, by_shop = mail.outbox
+        self.assertIn('As you asked', by_customer.body)
+        self.assertIn('we had to cancel', by_shop.body)
 
 
 class LastItemRaceTests(TransactionTestCase):

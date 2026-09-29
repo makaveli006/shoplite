@@ -1,0 +1,5 @@
+{% autoescape off %}Shipping to:
+  {{ order.full_name }}
+  {{ order.address }}
+  {{ order.postal_code }} {{ order.city }}
+  {{ order.country }}{% endautoescape %}

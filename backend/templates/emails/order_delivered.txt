@@ -1,0 +1,10 @@
+{% autoescape off %}Hi {{ order.full_name }},
+
+Your order #{{ order.pk }} was delivered. We hope you enjoy it, and thank you for shopping with {{ site_name }}!
+
+{% include "emails/_items.txt" %}
+
+Shop again: {{ shop_url }}
+
+{{ site_name }}
+{% endautoescape %}

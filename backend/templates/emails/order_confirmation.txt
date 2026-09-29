@@ -1,0 +1,12 @@
+{% autoescape off %}Hi {{ order.full_name }},
+
+Thank you for your order #{{ order.pk }}! We have received it and will email you again as soon as it ships.
+
+{% include "emails/_items.txt" %}
+
+{% include "emails/_address.txt" %}
+
+View your order: {{ order_url }}
+
+{{ site_name }}
+{% endautoescape %}

@@ -1,7 +1,6 @@
 Ideas for what to build next
 
 Roughly from easiest to biggest:
-1. Password reset by email, using the worker and email setup you already have
 2. Nicer HTML emails (order confirmation with pictures), plus "your order has shipped" emails when an admin marks it shipped
 3. Auto-reload when a page file is missing after a new version, the gap from your last question
 4. Product reviews and ratings: a new model, API, and frontend section; only customers who bought the product may review

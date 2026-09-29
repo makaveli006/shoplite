@@ -1,0 +1,19 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}Your order #{{ order.pk }} was cancelled.{% endblock %}
+
+{% block content %}
+<h1 style="margin:0 0 12px 0;font-size:22px;line-height:30px;color:#171717;">Your order was cancelled</h1>
+<p style="margin:0;">
+  Hi {{ order.full_name }},
+  {% if cancelled_by_customer %}
+  as you asked, we have cancelled your order <strong style="color:#171717;">#{{ order.pk }}</strong>.
+  {% else %}
+  we are sorry, but we had to cancel your order <strong style="color:#171717;">#{{ order.pk }}</strong>.
+  If you have any questions, just reply to this email.
+  {% endif %}
+</p>
+
+{% include "emails/_items.html" %}
+{% include "emails/_button.html" with url=order_url label="View your order" %}
+{% endblock %}

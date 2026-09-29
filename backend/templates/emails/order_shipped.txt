@@ -1,0 +1,12 @@
+{% autoescape off %}Hi {{ order.full_name }},
+
+Good news: your order #{{ order.pk }} has shipped and is on its way to you.
+
+{% include "emails/_address.txt" %}
+
+{% include "emails/_items.txt" %}
+
+View your order: {{ order_url }}
+
+{{ site_name }}
+{% endautoescape %}

@@ -1,0 +1,12 @@
+{% comment %}
+A big dark button. Use: {% include "emails/_button.html" with url=... label="..." %}
+Built as a table cell with a background colour, because some mail apps (Outlook) ignore
+padding and background on links.
+{% endcomment %}
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:24px 0;">
+  <tr>
+    <td style="border-radius:8px;background-color:#171717;">
+      <a href="{{ url }}" style="display:inline-block;padding:12px 24px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:bold;line-height:20px;color:#ffffff;text-decoration:none;border-radius:8px;">{{ label }}</a>
+    </td>
+  </tr>
+</table>

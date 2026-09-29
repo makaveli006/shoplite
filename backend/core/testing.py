@@ -1,8 +1,13 @@
 """Small helpers shared by the tests of all apps."""
 
+import io
+import tempfile
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.core.files.base import ContentFile
+from django.test import override_settings
+from PIL import Image
 from rest_framework.test import APIClient
 
 from catalog.models import Category, Product
@@ -31,6 +36,25 @@ def make_product(category, name='Blue Mug', price='12.50', stock=10, is_active=T
         stock=stock,
         is_active=is_active,
     )
+
+
+def make_picture(name='picture.png', size=(300, 200)):
+    """A small, real PNG file (with transparency), ready for product.image.save(name, file)."""
+    buffer = io.BytesIO()
+    Image.new('RGBA', size, (200, 80, 40, 255)).save(buffer, format='PNG')
+    return ContentFile(buffer.getvalue(), name=name)
+
+
+class TemporaryMediaMixin:
+    """Put this first in a test class's bases: files saved by its tests go to a temporary
+    folder (deleted afterwards) instead of the real backend/media folder."""
+
+    @classmethod
+    def setUpClass(cls):
+        media = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(media.cleanup)
+        cls.enterClassContext(override_settings(MEDIA_ROOT=media.name))
+        super().setUpClass()
 
 
 def client_for(user=None):

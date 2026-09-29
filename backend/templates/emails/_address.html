@@ -1,0 +1,8 @@
+{# The shipping address copied into the order at checkout. #}
+<p style="margin:16px 0 0 0;font-size:14px;line-height:22px;color:#3f3f46;">
+  <strong style="color:#171717;">Shipping to</strong><br>
+  {{ order.full_name }}<br>
+  {{ order.address }}<br>
+  {{ order.postal_code }} {{ order.city }}<br>
+  {{ order.country }}
+</p>

@@ -6,7 +6,7 @@ from cart.models import Cart
 from catalog.models import Product
 
 from .models import Order, OrderItem
-from .tasks import send_order_confirmation
+from .tasks import ORDER_EMAILS, send_order_email
 
 
 class OrderStatusError(Exception):
@@ -81,7 +81,7 @@ def place_order(user, shipping):
     #    (if the transaction rolls back, nothing is queued). robust=True: if the queue
     #    (Redis) is unreachable, log the error instead of failing a checkout that
     #    already succeeded.
-    transaction.on_commit(lambda: send_order_confirmation.delay(order.pk), robust=True)
+    transaction.on_commit(lambda: send_order_email.delay(order.pk, 'confirmation'), robust=True)
 
     return order
 
@@ -122,4 +122,13 @@ def change_status(order_id, new_status, customer=None):
 
     order.status = new_status
     order.save(update_fields=['status', 'updated_at'])
+
+    # Tell the customer, the same way checkout does: queued only after the change is really
+    # saved, and a broken queue (Redis down) never undoes a status change that succeeded.
+    if new_status in ORDER_EMAILS:
+        by_customer = customer is not None
+        transaction.on_commit(
+            lambda: send_order_email.delay(order.pk, new_status, cancelled_by_customer=by_customer),
+            robust=True,
+        )
     return order
