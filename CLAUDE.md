@@ -61,7 +61,13 @@ Everything comes from env vars via the `env_bool` / `env_list` helpers in `confi
 - **Routes:** `reviews/urls.py` has plain paths under `products/<slug>/reviews/` (public list, POST) and `products/<slug>/reviews/me/` (GET `{can_review, review}`, PATCH, DELETE). The "me" route makes ownership implicit. It's included in `config/urls.py` **before** `catalog.urls`.
 - **Visibility:** hidden reviews (`is_visible=False`, set only in the Django admin) are excluded from the public list and from ratings, but returned to their author by `me`. `author` is "First L." or the username, never the email.
 - **Ratings on products:** `ProductViewSet.get_queryset` annotates `review_count` and `average_rating` (visible reviews only) plus `rating` (`Coalesce(avg, 0)`): the `?ordering=-rating` sort key, so unrated products sort last instead of NULLs first. `ProductSerializer` reads the annotations with `getattr` defaults.
-- **Frontend:** `hooks/useReviews.ts`. The list is a `useInfiniteQuery` (key `['reviews', slug]`, "Show more"); the "me" data is `['my-review', slug]`. Mutations update `['my-review', slug]` and invalidate the review list, `['product', slug]` and `['products']`. The UI is in `components/reviews/` (`MyReviewBox` picks sign-in / form / own review / not-eligible). `ProductDetailPage` scrolls to `#reviews` when the address has that hash.
+- **Frontend:** `hooks/useReviews.ts`. The list is a `useInfiniteQuery` (key `['reviews', slug]`, "Show more"); the "me" data is `['my-review', slug]`. Mutations update `['my-review', slug]` and invalidate the review list, `['product', slug]` and `['products']`. The UI is in `components/reviews/` (`MyReviewBox` picks sign-in / form / own review / not-eligible). `ProductReviews` (lazy-loaded by `ProductDetailPage`) scrolls to `#reviews` when the address has that hash.
+
+### Wishlist (`wishlist` app)
+- **Backend:** `WishlistItem` is unique per (user, product). The endpoints are `wishlist/` (GET a plain, unpaginated list, newest first; POST `{product_id}`) and `wishlist/<product_id>/` (DELETE, **addressed by product id**). Both writes are idempotent: POST returns 201, or 200 if the product was already saved (with an `IntegrityError` fallback); DELETE always returns 204 and only touches the signed-in user's rows. Only active products can be saved, but items stay listed with `is_active: false` if the product is hidden later.
+- **Frontend:** `hooks/useWishlist.ts` holds `WISHLIST_KEY`. `useIsInWishlist(id)` reads the one cached list, so every heart shares it. `useToggleWishlist` is an **optimistic** mutation (`onMutate` writes the cache, `onError` rolls back, `onSettled` refetches); its toasts live in the hook because removing a row unmounts the component.
+- **`ProductCard` layout:** it is a `div.relative` wrapping the `<Link>` card, with `WishlistButton` as a sibling positioned over it. Never put buttons inside the link.
+- **Main bundle size:** the product page's reviews section (`components/reviews/ProductReviews.tsx`) is `React.lazy`-loaded to keep the main bundle under Vite's 500 kB warning.
 
 ### Emails
 - **Sending:** every email goes through `core.emails.send_email()`. It renders `backend/templates/emails/<name>.txt` and `.html` (both are required) and sends them as one multipart message.
@@ -85,7 +91,11 @@ Emails sent by a task that the test calls directly land in `mail.outbox`. Celery
 - Product list filters live in the URL search params and are part of the query key (`placeholderData: keepPreviousData`).
 - `src/router.tsx`: Home, Products, ProductDetail and NotFound load eagerly; every other page is a lazy route. `RequireAuth` / `RequireAdmin` in `components/auth/RouteGuards.tsx` wrap route groups. Login/register redirects go through `safeNext()` (`lib/redirect.ts`) to prevent open redirects.
 - UI is shadcn/ui (Radix) in `src/components/ui` (generated code) plus Tailwind 4 via `@tailwindcss/vite`; the `@/` alias points to `src/`.
-- Frontend tests use Vitest + jsdom + Testing Library. Mock the API module (`vi.mock('@/api/catalog', ...)`) and render with the providers from `src/test/render.tsx`, using the data builders in `src/test/fixtures.ts`.
+- Frontend tests use Vitest + jsdom + Testing Library (and `userEvent`).
+  - Mock the API module (`vi.mock('@/api/catalog', ...)`).
+  - Render with `renderWithProviders(ui, { route, auth })` from `src/test/render.tsx`. It supplies Query, the router and an `AuthContext`, signed out by default; pass `auth: signedIn()` from `src/test/fixtures.ts` for a signed-in customer.
+  - Anything that calls `useAuth()` needs this, because it throws without a provider.
+  - Data builders: `makeProduct`, `makeUser`, `makeWishlistItem`, `page`.
 
 ## Conventions
 - Code comments are plain-English explanations of *why* (this is a learning project); match that style.

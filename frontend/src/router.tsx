@@ -38,6 +38,7 @@ export const router = createBrowserRouter([
         Component: RequireAuth,
         children: [
           { path: 'cart', lazy: async () => ({ Component: (await import('@/pages/CartPage')).CartPage }) },
+          { path: 'wishlist', lazy: async () => ({ Component: (await import('@/pages/WishlistPage')).WishlistPage }) },
           { path: 'checkout', lazy: async () => ({ Component: (await import('@/pages/CheckoutPage')).CheckoutPage }) },
           { path: 'orders', lazy: async () => ({ Component: (await import('@/pages/OrdersPage')).OrdersPage }) },
           {

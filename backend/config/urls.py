@@ -28,6 +28,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('accounts.urls')),
     path('api/', include('cart.urls')),
+    path('api/', include('wishlist.urls')),
     path('api/', include('orders.urls')),
     path('api/', include('reviews.urls')),  # products/<slug>/reviews/..., before the catalog's products/<slug>/
     path('api/', include('catalog.urls')),

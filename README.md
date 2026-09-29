@@ -11,6 +11,7 @@ Customers browse products, fill a cart and check out; staff manage products, cat
 - **Accounts**: registration, login with JWT (short-lived access token, automatic silent refresh), profile page
 - **Password reset by email**: one-time signed links that expire, with a rate limit against inbox flooding
 - **Cart**: server-side cart per customer, with stock checks
+- **Wishlist**: a heart on every product card and product page to save it for later, a "My wishlist" page with a count in the header (saved on your account; adding to the cart keeps it saved; products the shop hides later show as "no longer available")
 - **Reviews and ratings**: 1–5 stars with an optional comment, only from customers whose order with the product was delivered (one review each, editable). Average stars on product cards and pages, a "Top rated" sort, and moderation (hide/show) in the Django admin
 - **Checkout**: turns the cart into an order in one database transaction; stock is locked so two customers can't buy the last item at the same time
 - **Orders**: status lifecycle (pending → paid → shipped → delivered, or cancelled), customers can cancel pending orders, cancelling returns the stock
@@ -58,6 +59,7 @@ shoplite/
 │   ├── cart/                # cart and cart items
 │   ├── orders/              # orders, checkout service, status changes, email tasks
 │   ├── reviews/             # product reviews and ratings, who may review, moderation
+│   ├── wishlist/            # saved-for-later products (the heart button)
 │   └── core/                # shared permissions, pagination, filters, test helpers
 ├── frontend/                # React + TypeScript app (Vite)
 │   └── src/
@@ -267,6 +269,8 @@ All addresses start with `/api/`. Send the access token as `Authorization: Beare
 | `POST products/{slug}/reviews/` | signed in, order delivered | write a review (`rating` 1–5, optional `comment`) |
 | `GET/PATCH/DELETE products/{slug}/reviews/me/` | signed in | may I review (`can_review`), and my own review: read, change, delete |
 | `GET cart/`, `POST cart/items/`, `PATCH/DELETE cart/items/{id}/` | signed in | the cart |
+| `GET wishlist/`, `POST wishlist/` (`{"product_id": 7}`) | signed in | my saved products (newest first); save one (201, or 200 if already saved) |
+| `DELETE wishlist/{product_id}/` | signed in | take a product off my wishlist (204, also if it wasn't there) |
 | `POST orders/checkout/` | signed in | turn the cart into an order |
 | `GET orders/`, `GET orders/{id}/` | signed in | your orders (staff: all orders) |
 | `POST orders/{id}/cancel/` | order owner | cancel a pending order |

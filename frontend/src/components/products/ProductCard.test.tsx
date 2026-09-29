@@ -32,6 +32,12 @@ describe('ProductCard', () => {
     expect(screen.getByText('4.5 (3)')).toBeInTheDocument()
   })
 
+  it('has a wishlist heart next to the link, not inside it', () => {
+    renderWithProviders(<ProductCard product={makeProduct()} />)
+    const heart = screen.getByRole('button', { name: 'Save Chef Knife to your wishlist' })
+    expect(screen.getByRole('link')).not.toContainElement(heart) // a button inside a link is invalid HTML
+  })
+
   it('shows no stars for a product without reviews', () => {
     renderWithProviders(<ProductCard product={makeProduct()} />)
     expect(screen.queryByRole('img', { name: /Rated/ })).not.toBeInTheDocument()

@@ -1,4 +1,46 @@
-import type { Category, Paginated, Product } from '@/types/api'
+import type { AuthContextValue } from '@/auth/context'
+import type { Category, Paginated, Product, User, WishlistItem, WishlistProduct } from '@/types/api'
+
+export function makeUser(overrides: Partial<User> = {}): User {
+  return {
+    id: 3,
+    email: 'ana@example.com',
+    username: 'ana',
+    first_name: 'Ana',
+    last_name: 'Silva',
+    is_staff: false,
+    date_joined: '2026-09-01T10:00:00Z',
+    ...overrides,
+  }
+}
+
+/** For renderWithProviders(ui, { auth: signedIn() }): a signed-in customer. */
+export function signedIn(user: User = makeUser()): Partial<AuthContextValue> {
+  return { user, status: 'authenticated' }
+}
+
+/** A saved product: makeWishlistItem({ product: { is_active: false } }) */
+export function makeWishlistItem({
+  product,
+  ...overrides
+}: Partial<Omit<WishlistItem, 'product'>> & { product?: Partial<WishlistProduct> } = {}): WishlistItem {
+  return {
+    id: 1,
+    added_at: '2026-09-28T09:00:00Z',
+    product: {
+      id: 7,
+      name: 'Chef Knife',
+      slug: 'chef-knife',
+      price: '49.99',
+      stock: 5,
+      in_stock: true,
+      image: null,
+      is_active: true,
+      ...product,
+    },
+    ...overrides,
+  }
+}
 
 /** A realistic product, with any fields replaced as needed: makeProduct({ stock: 0 }) */
 export function makeProduct(overrides: Partial<Product> = {}): Product {

@@ -116,6 +116,24 @@ export interface Product {
   updated_at: string
 }
 
+/** The product details a wishlist item carries (a smaller version of Product). */
+export interface WishlistProduct {
+  id: number
+  name: string
+  slug: string
+  price: string
+  stock: number
+  in_stock: boolean
+  image: string | null
+  is_active: boolean // false: hidden by the shop since it was saved ("no longer available")
+}
+
+export interface WishlistItem {
+  id: number
+  product: WishlistProduct
+  added_at: string
+}
+
 export interface Review {
   id: number
   rating: number // 1 to 5 stars
