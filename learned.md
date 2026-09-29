@@ -7248,3 +7248,160 @@ npm run build
 cd ..
 git add backend frontend
 git commit -m "Admin orders: all orders with status filter and search, next-step buttons, cancel with stock return"
+
+
+
+
+
+Phase 15: Frontend tests, and the full end-to-end run-through
+
+Lesson 14.3's checkpoint was perfect: all six customer attempts were refused with 403, and 41 backend tests OK. Commit 5e7751a is in.
+
+🎉 Phase 14 is complete, and with it the whole shop.
+
+---
+
+Part 1: Automated tests for the frontend
+
+What & why
+
+In Phase 9 we gave the backend automated tests, and they've protected it through every change since. The frontend has none. Every time we changed a page, you had to click through it by hand. Frontend tests work the same way as the backend ones: draw a piece of the shop in a simulated browser, act like a user (click, read), and check the result. It all runs in a few seconds, with no Django, no database, and no real browser needed.
+
+We use:
+- Vitest, a test runner built on Vite, so it understands our @React exactly like the dev server does
+    "test:watch": "vitest",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+
+Quick status: all 12 frontend tests pass, and the type check, build, and lint still pass with the test files included. Here's Phase 15.
+
+Phase 15: Frontend tests, and the full end-to-end run-through
+
+Lesson 14.3's checkpoint was perfect: all six customer attempts were refused with 403, and 41 backend tests OK. Commit 5e7751a is in.
+
+🎉 Phase 14 is complete, and with it the whole shop.
+
+---
+
+Part 1: Automated tests for the frontend
+
+In Phase 9 we gave the backend automated tests, and they've protected it through every change since. The frontend has none. Every time we changed a page, you had to click through it by hand. Frontend tests work the same way as the backend ones: draw a piece of the shop in a simulated browser, act like a user (click, read), and check the result. It all runs in a few seconds, with no Django, no database, and no real browser needed.
+
+We use:
+- Vitest, a test runner built on Vite, so it understands our @/ shortcuts, TypeScript, and React exactly like the dev server does
+- React Testing Library, which draws components and finds things the way a user would: "the button called One more", "the text Out of stock", not internal
+  code names. That makes tests stay valid when the code is reo behaves the same.
+- jsdom, the simulated browser
+
+What happens when you run them
+
+1. Vitest finds every file ending in .test.ts or .test.tsx and runs them.
+2. Each test draws a component on an empty simulated page, with the same wrappers the real app uses (the data memory and the router), starting at a web address we choose, like /products?category=kitchen.
+3. The API is replaced by stand-ins for page tests. Instead of asking Django, the page gets answers we prepared: "here are 2 products", "here is an empty
+   list", "the network failed". That's how we can test the empe hard to produce on demand with a real server. We also checkwhat the page asked for, for example that the filters from the address were passed on.
+4. After each test, the page is wiped clean, so tests can't affect each other.
+
+The 12 tests
+
+┌───────────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│           File            │                                 hecks                                                      │
+    │ The "come back after sign-in" address accepts shop pages and refuses other websites, including //evil.example and       │
+│                           │ javascript: tricks (the open-redirect guard from Lesson 12.1)                                                           │
+├───────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ QuantityPicker.test.tsx   │ Clicking + / − reports the new number; the buttons are disabled at 1 and at the stock limit                             │
+│ (2)                       │                                                                                                                         │
+├───────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ProductCard.test.tsx (3)  │ Shows name, category, and price and links to the product page; shows Out of stock only when stock is 0                  │
+├───────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ProductsPage.test.tsx (4) │ Shows the products and "2 producfilters from the web address to the API; shows No products │
+│                           │  match your filters.; shows Couldn't load the products. with Try again when loading fails                               │
+└───────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+What I added: the test settings in vite.config.ts, a setup file, a helper that draws components with the app's wrappers, realistic sample data, the four test files, and two commands in package.json: npm test (run once) and npm run test:watch (keep running and re-test on every save).
+
+▶️ Your turn
+
+Step 1: Install the test tools (pause OneDrive first):
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\frontend"
+npm install -D vitest jsdom @testing-library/react @testing-library/dom @testing-library/jest-dom @testing-library/user-event
+You should get vitest 5.0.2 (which supports our Vite 8), jsdomThey're development-only, like coverage for the backend (Phase
+9), so they never end up in the shop that customers download.
+
+Step 2: Run them:
+npm test
+Expected:
+a deliberate break:
+npm run test:watch
+Leave it running. Open src\components\products\ProductCard.tsx, find the text Out of stock, change it to Sold out, and save. Within a second the watcher re-runs and reports 1 failed test, "marks products that are out of stock", and shows what it looked for and didn't find. Change it back and save: all green again. Press q to quit watch mode.
+
+---
+
+Part 2: The full end-to-end run-through
+
+Everything has been tested piece by piece. Now we walk through the whole shop once, as real people would, with every part running together: PostgreSQL, Redis, the worker, Django, and React. Work down the list and tick off each line.
+
+
+db, redis, and worker should be up. Start Django (cd backend, then uv run python manage.py runserver) and the frontend (npm run dev). In another window, follow the worker log: docker compose logs -f --tail 0 worker.
+
+┌─────┬─────────────────────────────┬─────────────────────────────────────────────────────────────┬──────────────────────────────────────────────────┐
+│  #  │             As…             │                           Do this                           │                     Expected                     │
+├─────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ 1   │ Visitor                     │ Open the shop, search "mug", filter Kitchen, sort by price, │ Correct results; the address changes; Back       │
+│     │                             │  go to page 2 and back         │ undoes each step                                 │
+├─────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ 2   │ Visitor                     │ Open a product, click Sign in to add to cart                │ Sign in page with ?next= for that product        │
+├─────┼─────────────────────────────┼────────────────────────────────┼──────────────────────────────────────────────────┤
+│ 3   │ New customer                │ Create one → register Dave (dave@example.com)               │ "Welcome to ShopLite, Dave!"; back on the        │
+│     │                             │                                                             │ product; header Hi, Dave                         │
+├─────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ 4   │ Dave                        │ Add 2 of the product, then 1 of another                     │ Pop-up messages; the badge counts 3              │
+├─────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ 5   │ Dave                        │ Cart: change a quantity,       │ Totals and badge update instantly                │
+├─────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ 6   │ Dave                        │ Checkout: fill the address, Place order                     │ Thank-you banner with the order number; badge    │
+│     │                             │                                │ gone                                             │
+├─────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ 7   │ Worker                      │ Look at the worker log         │ The confirmation email for Dave's order,         │
+│     │                             │                                                             │ addressed to dave@example.com                    │
+├─────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ 8   │ Dave                        │ Orders                                                      │ The new order, Pending                           │
+├─────┼─────────────────────────────┼────────────────────────────────┼──────────────────────────────────────────────────┤
+            │                                                             │ available"                                       │
+├─────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ 13  │ Admin                       │ Show it again                                               │ Back in the shop; the cart problem disappears    │
+├─────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ 14  │ Dave                        │ Try http://localhost:5173/admin                             │ Staff only                                       │
+├─────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ 15  │ Dave                        │ Sign out                                                    │ Header shows Sign in; the cart badge is gone     │
+├─────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ 16  │ Everyone                    │ Backend tests: cd backenpy     │ 41 tests OK                                      │
+│     │                             │ test                           │                                                  │
+├─────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+│ 17  │ Everyone                    │ Frontend tests and build: cd frontend, then npm test and    │ 12 tests passed; build succeeds                  │
+│     │                             │ npm run build                                               │                                                  │
+└─────┴─────────────────────────────┴────────────────────────────────┴──────────────────────────────────────────────────┘
+
+---
+
+❓ If something goes wrong
+
+┌───────────────────────────────────────────┬─────────────────────────────────────────────────┬───────────────────────────────────────────────────────┐
+│               What you see                │                       Why                       │                          Fix                          │
+├───────────────────────────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────┤
+│ npm test says Missing script: "test"      │ You're in the pr   │ cd frontend                                           │
+├───────────────────────────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────┤
+│ Cannot find package 'jsdom'               │ Step 1 wasn't co   │ Run the install command again in frontend\            │
+├───────────────────────────────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────────────┤
+│ Tests fail with a different price format, │ Your computer's language settings format        │ Tell me the exact message; the test checks for 49.99  │
+│  like 49,99                               │ numbers differently                             │                                                       │
+├───────────────────────────────────────────┼────────────────────┼───────────────────────────────────────────────────────┤
+ine,
+2. which test failed in Step 3 and its message, and
+3. whether all 17 run-through steps worked. If any didn't, tell me the number and what happened.
+
+Next: Phase 16, wrap-up.
+- A review of how all the parts fit together.
+- A production-readiness checklist: debug mode off, real secrets, serving the built frontend and uploaded images, a proper app server instead of runserver, HTTPS, and the 500 kB build warning.
+- The Django 5.1 → 5.2 LTS upgrade exercise, where your 53 autoke.
+- Ideas for what to build next.
