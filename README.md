@@ -14,6 +14,7 @@ Customers browse products, fill a cart and check out; staff manage products, cat
 - **Wishlist**: a heart on every product card and product page to save it for later, a "My wishlist" page with a count in the header (saved on your account; adding to the cart keeps it saved; products the shop hides later show as "no longer available")
 - **Reviews and ratings**: 1–5 stars with an optional comment, only from customers whose order with the product was delivered (one review each, editable). Average stars on product cards and pages, a "Top rated" sort, and moderation (hide/show) in the Django admin
 - **Checkout**: turns the cart into an order in one database transaction; stock is locked so two customers can't buy the last item at the same time
+- **Online payments with Razorpay** (test mode): the payment window opens right after placing the order (card, UPI, netbanking). The order becomes paid by itself when Razorpay confirms it, through a signed receipt from the browser *and* a signed webhook from Razorpay's servers (works even if the customer closes the tab). Whichever arrives first counts, so the "Payment received" email goes out once
 - **Orders**: status lifecycle (pending → paid → shipped → delivered, or cancelled), customers can cancel pending orders, cancelling returns the stock
 - **HTML emails with product pictures**: order confirmation, payment received, shipped, delivered, cancelled, and password reset, each with a plain-text version. They are sent by a Celery worker, so the website never waits for the mail server
 - **Admin area** in the React app (and the Django admin): product create/edit with image upload, categories, all orders with status changes
@@ -27,6 +28,7 @@ Customers browse products, fill a cart and check out; staff manage products, cat
 | Backend | Python 3.12, Django 5.2 LTS, Django REST Framework, SimpleJWT, django-filter, django-cors-headers, Pillow |
 | Database | PostgreSQL 16 |
 | Background jobs | Celery 5 with Redis 7 as the message broker |
+| Payments | Razorpay (Standard Checkout + webhooks, official `razorpay` Python package); zrok tunnel for webhooks in development |
 | Frontend | React 19, TypeScript, Vite 8, React Router, TanStack Query, Axios |
 | UI | Tailwind CSS 4, shadcn/ui (Radix UI), lucide icons, sonner toasts |
 | Tooling | uv (Python packages), npm, Docker Compose, oxlint, coverage.py, Vitest |
@@ -60,6 +62,7 @@ shoplite/
 │   ├── orders/              # orders, checkout service, status changes, email tasks
 │   ├── reviews/             # product reviews and ratings, who may review, moderation
 │   ├── wishlist/            # saved-for-later products (the heart button)
+│   ├── payments/            # Razorpay: start a payment, verify the receipt, webhook
 │   └── core/                # shared permissions, pagination, filters, test helpers
 ├── frontend/                # React + TypeScript app (Vite)
 │   └── src/
@@ -152,6 +155,35 @@ uv run python manage.py preview_emails            # uses the newest order; or --
 ```
 
 It saves the files in `backend/email-previews/` and prints a link to each one.
+
+### Payments (Razorpay test mode)
+
+Test mode moves no real money and needs no KYC or bank account. Without keys the shop still works;
+"Pay now" just answers that online payment isn't set up.
+
+1. In the [Razorpay Dashboard](https://dashboard.razorpay.com/), switch to **Test Mode** →
+   **Account & Settings → API Keys → Generate Test Key**.
+2. In `backend\.env` set `RAZORPAY_KEY_ID` (the `rzp_test_…` key) and `RAZORPAY_KEY_SECRET`, plus
+   `SHOP_CURRENCY=INR`; in `frontend\.env` set `VITE_CURRENCY=INR`. Restart Django and Vite.
+3. **Webhooks** need a public address, because Razorpay's servers can't reach `localhost`. In development,
+   open a tunnel with [zrok](https://zrok.io) and keep it running:
+
+   ```powershell
+   zrok2 create name <yourname>                                    # once
+   zrok2 share public http://localhost:8000 -n public:<yourname>   # each session
+   ```
+
+   Add the printed host (e.g. `<yourname>.shares.zrok.io`) to `DJANGO_ALLOWED_HOSTS`, make a secret with
+   `uv run python -c "import secrets; print(secrets.token_urlsafe(32))"` and put it in `RAZORPAY_WEBHOOK_SECRET`.
+4. In the Dashboard (Test mode) → **Webhooks → Add New Webhook**: URL `https://<your host>/api/payments/webhook/`,
+   the same secret, events `payment.captured`, `payment.failed`, `order.paid`.
+
+Pay with a [test card](https://razorpay.com/docs/payments/payments/test-card-upi-details/), e.g. Visa
+`4100 2800 0000 1007`, any future expiry and CVV; an OTP of 4–10 digits succeeds, fewer than 4 fails.
+The Django admin's **Payments** page shows each attempt and whether the browser receipt or the webhook confirmed it;
+**Webhook events** lists what Razorpay delivered.
+
+In production there's no tunnel: use live keys and add a live-mode webhook for the real domain.
 
 ## Running the tests
 
@@ -271,6 +303,9 @@ All addresses start with `/api/`. Send the access token as `Authorization: Beare
 | `GET cart/`, `POST cart/items/`, `PATCH/DELETE cart/items/{id}/` | signed in | the cart |
 | `GET wishlist/`, `POST wishlist/` (`{"product_id": 7}`) | signed in | my saved products (newest first); save one (201, or 200 if already saved) |
 | `DELETE wishlist/{product_id}/` | signed in | take a product off my wishlist (204, also if it wasn't there) |
+| `POST payments/start/` (`{"order_id": 15}`) | order owner | open a Razorpay payment for a pending order; returns what the payment window needs (public key, Razorpay order id, amount in paise) |
+| `POST payments/verify/` | order owner | the payment window's signed receipt; a genuine one marks the order paid |
+| `POST payments/webhook/` | Razorpay's servers | signed payment events (`payment.captured`, `order.paid`, `payment.failed`); repeated deliveries are skipped |
 | `POST orders/checkout/` | signed in | turn the cart into an order |
 | `GET orders/`, `GET orders/{id}/` | signed in | your orders (staff: all orders) |
 | `POST orders/{id}/cancel/` | order owner | cancel a pending order |

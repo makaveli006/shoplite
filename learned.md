@@ -9515,3 +9515,38 @@ git push
 Tell me what the zrok window shows, or any error. Step 4 is the README and CLAUDE.md, with the PR still a draft.
 
 ✻ Sautéed for 2m 18s · done 6:24 PM
+
+
+
+Step 4 is done: only README.md and CLAUDE.md changed, on feature/payment-gateway.
+
+What changed in the docs
+
+- README:
+  - Features: online payments with Razorpay, and how the browser receipt and the webhook work together.
+  - Tech stack: Razorpay and zrok added.
+  - Project structure: the payments/ folder added.
+  - New "Payments (Razorpay test mode)" setup section: test keys, INR, the zrok tunnel, webhook setup and test cards. It also says production needs live keys and a real domain instead of a tunnel.
+  - API table: the three payment addresses.
+- CLAUDE.md:
+  - A new Payments section for future Claude sessions: the branch rule, where Razorpay is called, why amounts are in paise and come from the database, the "two confirmations, one effect" design, how repeated webhooks are skipped, and how tests fake Razorpay.
+  - Updated test notes: the new makeOrder builder, the wrapper, and the fake payment window.
+
+Commit and push (branch only)
+
+git add .
+git commit -m "Payments step 4: README and CLAUDE.md for Razorpay payments"
+git push
+CI will run again on draft PR #1.
+
+That completes the plan
+
+You can pay by card in Razorpay's test mode, and orders turn Paid either from the browser receipt or from Razorpay's webhook, with exactly one "Payment received" email. There are 108 backend tests and 40 frontend tests. main is still at 07744e8, untouched.
+
+Merging into main is your decision. When you want it, tell me explicitly, for example "merge PR #1 into main". I'll mark the PR ready, check CI once more, and merge. Until then it stays a draft.
+
+Worth doing before a real launch, on this branch or later:
+- Auto-cancel unpaid orders: a pending order keeps its stock reserved forever right now. A timed job (Celery beat) could cancel orders left unpaid for, say, 30 minutes, and return the stock.
+- Refunds from the shop: today a paid-then-cancelled order is only flagged "needs refund" and you refund it in Razorpay's dashboard. The shop could call Razorpay's refund API itself.
+
+✻ Cooked for 1m 26s · done 6:59 PM
