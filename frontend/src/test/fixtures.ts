@@ -13,6 +13,8 @@ export function makeProduct(overrides: Partial<Product> = {}): Product {
     image: null,
     is_active: true,
     category: { id: 2, name: 'Kitchen', slug: 'kitchen' },
+    average_rating: null,
+    review_count: 0,
     created_at: '2026-09-27T15:19:22Z',
     updated_at: '2026-09-27T15:19:22Z',
     ...overrides,

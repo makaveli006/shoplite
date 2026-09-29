@@ -110,6 +110,29 @@ export interface Product {
   image: string | null
   is_active: boolean
   category: CategorySummary
+  average_rating: number | null // e.g. 4.3; null while the product has no reviews
+  review_count: number
   created_at: string
   updated_at: string
+}
+
+export interface Review {
+  id: number
+  rating: number // 1 to 5 stars
+  comment: string // may be empty
+  author: string // a public name like "Ana S.", never the email
+  is_visible: boolean // false when staff hid it (the author still sees their own)
+  created_at: string
+  updated_at: string
+}
+
+/** GET /products/<slug>/reviews/me/ : may I review this product, and my review if I wrote one. */
+export interface MyReview {
+  can_review: boolean
+  review: Review | null
+}
+
+export interface ReviewValues {
+  rating: number
+  comment: string
 }

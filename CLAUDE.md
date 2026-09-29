@@ -56,6 +56,13 @@ Everything comes from env vars via the `env_bool` / `env_list` helpers in `confi
 - The allowed transitions are **mirrored in the frontend** (the next-step buttons in `frontend/src/pages/admin/AdminOrdersPage.tsx`); keep both in sync.
 - Catalog resources are looked up by `slug`. Deleting a category that still has products returns 409 (`ProtectedError`). The category list is annotated with `product_count` and is not paginated.
 
+### Reviews (`reviews` app)
+- **Who may review:** `Review` has one row per (user, product), enforced by a `UniqueConstraint`, and a 1–5 `CheckConstraint`. `reviews/services.can_review()` is the rule: the user has an `OrderItem` for the product in an order with status `delivered`. The POST view returns 403 without a delivered order and 400 for a second review; an `IntegrityError` from the unique constraint is caught as the safety net.
+- **Routes:** `reviews/urls.py` has plain paths under `products/<slug>/reviews/` (public list, POST) and `products/<slug>/reviews/me/` (GET `{can_review, review}`, PATCH, DELETE). The "me" route makes ownership implicit. It's included in `config/urls.py` **before** `catalog.urls`.
+- **Visibility:** hidden reviews (`is_visible=False`, set only in the Django admin) are excluded from the public list and from ratings, but returned to their author by `me`. `author` is "First L." or the username, never the email.
+- **Ratings on products:** `ProductViewSet.get_queryset` annotates `review_count` and `average_rating` (visible reviews only) plus `rating` (`Coalesce(avg, 0)`): the `?ordering=-rating` sort key, so unrated products sort last instead of NULLs first. `ProductSerializer` reads the annotations with `getattr` defaults.
+- **Frontend:** `hooks/useReviews.ts`. The list is a `useInfiniteQuery` (key `['reviews', slug]`, "Show more"); the "me" data is `['my-review', slug]`. Mutations update `['my-review', slug]` and invalidate the review list, `['product', slug]` and `['products']`. The UI is in `components/reviews/` (`MyReviewBox` picks sign-in / form / own review / not-eligible). `ProductDetailPage` scrolls to `#reviews` when the address has that hash.
+
 ### Emails
 - **Sending:** every email goes through `core.emails.send_email()`. It renders `backend/templates/emails/<name>.txt` and `.html` (both are required) and sends them as one multipart message.
 - **Templates:** the HTML templates extend `emails/base.html` and reuse `_items`, `_address` and `_button`. They use tables and inline styles only, because mail clients ignore most CSS. The `.txt` templates wrap their content in `{% autoescape off %}`.

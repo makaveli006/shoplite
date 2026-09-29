@@ -11,6 +11,7 @@ Customers browse products, fill a cart and check out; staff manage products, cat
 - **Accounts**: registration, login with JWT (short-lived access token, automatic silent refresh), profile page
 - **Password reset by email**: one-time signed links that expire, with a rate limit against inbox flooding
 - **Cart**: server-side cart per customer, with stock checks
+- **Reviews and ratings**: 1–5 stars with an optional comment, only from customers whose order with the product was delivered (one review each, editable). Average stars on product cards and pages, a "Top rated" sort, and moderation (hide/show) in the Django admin
 - **Checkout**: turns the cart into an order in one database transaction; stock is locked so two customers can't buy the last item at the same time
 - **Orders**: status lifecycle (pending → paid → shipped → delivered, or cancelled), customers can cancel pending orders, cancelling returns the stock
 - **HTML emails with product pictures**: order confirmation, payment received, shipped, delivered, cancelled, and password reset, each with a plain-text version. They are sent by a Celery worker, so the website never waits for the mail server
@@ -56,6 +57,7 @@ shoplite/
 │   ├── catalog/             # categories, products, images, search and filters
 │   ├── cart/                # cart and cart items
 │   ├── orders/              # orders, checkout service, status changes, email tasks
+│   ├── reviews/             # product reviews and ratings, who may review, moderation
 │   └── core/                # shared permissions, pagination, filters, test helpers
 ├── frontend/                # React + TypeScript app (Vite)
 │   └── src/
@@ -258,9 +260,12 @@ All addresses start with `/api/`. Send the access token as `Authorization: Beare
 | `POST auth/password-reset/`, `POST auth/password-reset/confirm/` | anyone | email a reset link, set the new password |
 | `GET categories/`, `GET categories/{slug}/` | anyone | categories with product counts |
 | `POST/PATCH/DELETE categories/…` | staff | manage categories |
-| `GET products/?search=&category=&min_price=&max_price=&ordering=&page=` | anyone | product list (12 per page) |
+| `GET products/?search=&category=&min_price=&max_price=&ordering=&page=` | anyone | product list (12 per page) with `average_rating` and `review_count`; `ordering=-rating` = top rated |
 | `GET products/{slug}/` | anyone | one product |
 | `POST/PATCH/DELETE products/…` | staff | manage products (multipart for images) |
+| `GET products/{slug}/reviews/` | anyone | the product's reviews (5 per page, newest first) |
+| `POST products/{slug}/reviews/` | signed in, order delivered | write a review (`rating` 1–5, optional `comment`) |
+| `GET/PATCH/DELETE products/{slug}/reviews/me/` | signed in | may I review (`can_review`), and my own review: read, change, delete |
 | `GET cart/`, `POST cart/items/`, `PATCH/DELETE cart/items/{id}/` | signed in | the cart |
 | `POST orders/checkout/` | signed in | turn the cart into an order |
 | `GET orders/`, `GET orders/{id}/` | signed in | your orders (staff: all orders) |

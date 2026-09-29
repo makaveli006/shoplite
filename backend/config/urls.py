@@ -29,6 +29,7 @@ urlpatterns = [
     path('api/auth/', include('accounts.urls')),
     path('api/', include('cart.urls')),
     path('api/', include('orders.urls')),
+    path('api/', include('reviews.urls')),  # products/<slug>/reviews/..., before the catalog's products/<slug>/
     path('api/', include('catalog.urls')),
     # "Log in" / "Log out" links for the browsable API (session login, development only).
     path('api-auth/', include('rest_framework.urls')),

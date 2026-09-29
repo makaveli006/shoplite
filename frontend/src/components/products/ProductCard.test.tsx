@@ -25,4 +25,15 @@ describe('ProductCard', () => {
     renderWithProviders(<ProductCard product={makeProduct()} />)
     expect(screen.queryByText('Out of stock')).not.toBeInTheDocument()
   })
+
+  it('shows the average rating and number of reviews', () => {
+    renderWithProviders(<ProductCard product={makeProduct({ average_rating: 4.5, review_count: 3 })} />)
+    expect(screen.getByRole('img', { name: 'Rated 4.5 out of 5' })).toBeInTheDocument()
+    expect(screen.getByText('4.5 (3)')).toBeInTheDocument()
+  })
+
+  it('shows no stars for a product without reviews', () => {
+    renderWithProviders(<ProductCard product={makeProduct()} />)
+    expect(screen.queryByRole('img', { name: /Rated/ })).not.toBeInTheDocument()
+  })
 })

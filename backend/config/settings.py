@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     'catalog',
     'cart',
     'orders',
+    'reviews',
 ]
 
 MIDDLEWARE = [
@@ -126,6 +127,10 @@ DATABASES = {
 # Use our own user model (accounts/models.py) instead of django.contrib.auth's User.
 # Must be set BEFORE the first `migrate`.
 AUTH_USER_MODEL = 'accounts.User'
+
+# Where the browsable API's "Log in" page (/api-auth/login/) goes after signing in, when
+# it doesn't know the page you came from. Django's default, /accounts/profile/, doesn't exist here.
+LOGIN_REDIRECT_URL = '/api/'
 
 
 # Django REST Framework

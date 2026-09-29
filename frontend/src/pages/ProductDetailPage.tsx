@@ -1,11 +1,14 @@
 import { isAxiosError } from 'axios'
 import { AlertCircle, ChevronRight, ImageOff, PackageX, ShoppingCart } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 
 import { useAuth } from '@/auth/useAuth'
 import { QuantityPicker } from '@/components/products/QuantityPicker'
+import { MyReviewBox } from '@/components/reviews/MyReviewBox'
+import { ReviewList } from '@/components/reviews/ReviewList'
+import { StarRating } from '@/components/reviews/StarRating'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -13,7 +16,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useAddToCart } from '@/hooks/useCart'
 import { useProduct } from '@/hooks/useCatalog'
 import { getErrorMessage, getFirstErrorMessage } from '@/lib/api'
-import { formatPrice } from '@/lib/format'
+import { formatPrice, formatRating, formatReviewCount } from '@/lib/format'
 import type { Product } from '@/types/api'
 
 export function ProductDetailPage() {
@@ -39,6 +42,14 @@ function ProductDetails({ product }: { product: Product }) {
   const navigate = useNavigate()
   const { user } = useAuth()
   const addMutation = useAddToCart()
+
+  // Opened with "#reviews" in the address (e.g. "Write a review" on an order, or back from
+  // signing in): scroll down to the reviews. React Router doesn't do this by itself.
+  useEffect(() => {
+    if (location.hash === '#reviews') {
+      document.getElementById('reviews')?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [location.hash])
 
   function addThisToCart() {
     addMutation.mutate(
@@ -88,6 +99,9 @@ function ProductDetails({ product }: { product: Product }) {
           <div>
             <p className="text-sm text-muted-foreground">{product.category.name}</p>
             <h1 className="text-3xl font-bold tracking-tight">{product.name}</h1>
+            <a href="#reviews" className="mt-2 inline-flex text-sm hover:underline">
+              <RatingSummary product={product} />
+            </a>
           </div>
 
           <p className="text-3xl font-semibold">{formatPrice(product.price)}</p>
@@ -116,7 +130,37 @@ function ProductDetails({ product }: { product: Product }) {
           )}
         </div>
       </div>
+
+      <Separator />
+
+      {/* scroll-mt: leave room for the sticky header when scrolling to #reviews. */}
+      <section id="reviews" aria-labelledby="reviews-heading" className="flex scroll-mt-24 flex-col gap-6">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 id="reviews-heading" className="text-2xl font-semibold tracking-tight">
+            Customer reviews
+          </h2>
+          <span className="text-sm">
+            <RatingSummary product={product} />
+          </span>
+        </div>
+        <MyReviewBox product={product} />
+        <ReviewList slug={product.slug} />
+      </section>
     </article>
+  )
+}
+
+/** "★★★★☆ 4.3 (12 reviews)", or "No reviews yet". */
+function RatingSummary({ product }: { product: Product }) {
+  if (!product.review_count || product.average_rating === null) {
+    return <span className="text-muted-foreground">No reviews yet</span>
+  }
+  return (
+    <span className="inline-flex items-center gap-2">
+      <StarRating rating={product.average_rating} />
+      <span className="font-medium">{formatRating(product.average_rating)}</span>
+      <span className="text-muted-foreground">({formatReviewCount(product.review_count)})</span>
+    </span>
   )
 }
 

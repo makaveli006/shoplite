@@ -1,5 +1,5 @@
 import { isAxiosError } from 'axios'
-import { CheckCircle2, PackageX } from 'lucide-react'
+import { CheckCircle2, PackageX, Star } from 'lucide-react'
 import { Link, useParams, useSearchParams } from 'react-router'
 
 import { useAuth } from '@/auth/useAuth'
@@ -40,6 +40,8 @@ export function OrderDetailPage() {
 
   const data = order.data
   const placedOn = new Date(data.created_at).toLocaleString(undefined, { dateStyle: 'long', timeStyle: 'short' })
+  // Delivered items can be reviewed, by the customer who ordered them (not by staff looking at the order).
+  const canReview = data.status === 'delivered' && data.customer_email === user?.email
 
   return (
     <div className="flex flex-col gap-6">
@@ -81,6 +83,14 @@ export function OrderDetailPage() {
                     item.product_name
                   )}{' '}
                   <span className="text-muted-foreground">@ {formatPrice(item.unit_price)}</span>
+                  {canReview && item.product_slug && (
+                    <Link
+                      to={`/products/${item.product_slug}#reviews`}
+                      className="ml-2 inline-flex items-center gap-1 text-xs font-medium underline underline-offset-4"
+                    >
+                      <Star className="size-3" aria-hidden /> Write a review
+                    </Link>
+                  )}
                 </span>
                 <span className="shrink-0">{formatPrice(item.line_total)}</span>
               </div>

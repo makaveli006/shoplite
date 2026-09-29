@@ -1,11 +1,12 @@
 import { ImageOff } from 'lucide-react'
 import { Link } from 'react-router'
 
+import { StarRating } from '@/components/reviews/StarRating'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePrefetchProduct } from '@/hooks/useCatalog'
-import { formatPrice } from '@/lib/format'
+import { formatPrice, formatRating } from '@/lib/format'
 import type { Product } from '@/types/api'
 
 export function ProductCard({ product }: { product: Product }) {
@@ -40,6 +41,14 @@ export function ProductCard({ product }: { product: Product }) {
         </CardHeader>
         <CardContent className="mt-auto">
           <p className="text-lg font-semibold">{formatPrice(product.price)}</p>
+          {product.review_count > 0 && product.average_rating !== null && (
+            <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <StarRating rating={product.average_rating} size="sm" />
+              <span>
+                {formatRating(product.average_rating)} ({product.review_count})
+              </span>
+            </p>
+          )}
         </CardContent>
       </Card>
     </Link>

@@ -8907,3 +8907,172 @@ The short answer is both, each holding a different kind of secret:
 So if your GitHub account or a workflow log ever leaked, the attacker still wouldn't get your database or email passwords.
 
 To publish it:
+
+
+  Ran 1 shell command
+
+Step 1, the backend, is done. Reviews work at the API level, and all 73 backend tests pass (12 new).
+
+What & why
+
+Reviews are their own part of the shop. I created a new app called reviews, the same way catalog, cart and orders are apps. A review stores who wrote it, for which product, 1 to 5 stars, an optional comment, and a "visible" switch. The database itself enforces two rules, like it does for stock:
+
+- One review per customer per product. Even two clicks at the same instant can't create a second one.
+- Stars must be 1 to 5.
+
+Who may review. Before saving a review, the shop checks whether this customer has an order that contains this product and is delivered. "Paid" or "shipped" isn't enough, because they haven't used it yet. Everyone else gets a clear "you can review this after delivery" message. That's why every review can honestly carry a "Verified purchase" badge.
+
+The review addresses, all next to the product:
+
+┌──────────────────────────────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│             Address              │                                                   What it does                                                    │
+├──────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ /api/products/<name>/reviews/    │ Anyone can read the reviews, 5 at a time, newest first. A signed-in customer can post one here.                   │
+├──────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ /api/products/<name>/reviews/me/ │ "My review for this product": see it, change it, or delete it. It also says whether you're allowed to review.     │
+│                                  │ Because it's always "me", nobody can change someone else's review.                                                │
+└──────────────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+Privacy. Reviews show the name as "Ana S." (first name plus the first letter of the last name), or the username. Never the email, because reviews are public.
+
+Ratings on every product. The product list and product pages now include the average stars and the number of reviews. The database works them out in the same query that loads the products, so it stays fast. There's also a new "top rated" sort (?ordering=-rating) that puts products without reviews last.
+
+Moderation. The Django admin has a new Reviews page where staff can search reviews and hide or show them. Hidden reviews disappear from the shop and from the averages, but their author can still see theirs, marked as hidden. Staff can delete a review, but can't edit a customer's words.
+
+I've already applied the database change (migration) to your development database.
+
+Try it (the frontend comes in step 2, so this uses the API pages in the browser)
+
+1. Admin: open http://127.0.0.1:8000/admin/ and you'll see a new Reviews section, empty for now.
+2. Sign in as the customer from order #15: go to http://127.0.0.1:8000/api-auth/login/ and sign in as sujithatk0@gmail.com. That order is delivered and contains the Ceramic Teapot.
+3. Post a review: open http://127.0.0.1:8000/api/products/ceramic-teapot/reviews/. At the bottom there's a form: enter {"rating": 5, "comment": "Lovely teapot"} and press POST. You should get 201 with the author shown as a name, not the email.
+4. Post the same review again: you should get 400, "already reviewed".
+5. Check the ratings: open http://127.0.0.1:8000/api/products/?ordering=-rating. The Teapot is first, with "average_rating": 5.0, "review_count": 1.
+6. Hide it: in the admin's Reviews page, untick "Is visible" and click Save. Refresh step 5 and the rating is gone. Tick it again to bring it back.
+7. Try a customer without a delivered order: sign in as one (for example customer@example.com) and try step 3 on a product they haven't received. You should get 403 with the "after an order with it has been delivered" message.
+8. Tests: uv run python manage.py test should end with Ran 73 tests and OK.
+
+Tell me when it works (or paste any error). Next is step 2: stars on the product cards and pages, and the review list and form in the shop.
+
+✻ Cogitated for 6m 26s · done 3:09 PM
+
+
+
+All the emails are built. Customers now get a message for every order step (confirmed, payment received, shipped, delivered, cancelled) and for a password reset, all in the new design. All 61 backend tests pass, and I've restarted the worker so it uses the new code.
+
+What & why
+
+Until now, only checkout sent an email. Changing an order's status just saved it and told nobody, which is why marking order #15 paid and delivered sent nothing.
+
+Every status change in ShopLite goes through one function: the shop's admin page, your "Cancel order" button as a customer, and the Django admin's "Mark selected orders as…" actions. That function now queues the matching email after it saves the new status. It uses the same safety rule as checkout: the email is queued only once the change is really saved, and if Redis is down the status change still succeeds.
+
+- Paid, shipped, delivered, cancelled: each email has the same look and its own message. The shipped email repeats the delivery address, and the delivered one has a "Shop again" button.
+- Cancelled email: it has two wordings. If the customer cancelled, it says "As you asked, we have cancelled your order". If the shop cancelled, it says "we are sorry, we had to cancel it" and invites a reply.
+- Password reset: now uses the same design, with a big "Choose a new password" button. The link is also written out underneath for when the button doesn't work. It still works once and expires after 60 minutes, and it's still created by the web server, so the time zone fix stays.
+- Preview command: now saves all 7 designs (the cancelled email twice, once per wording).
+- Docs: README.md and CLAUDE.md now describe the emails and the preview command.
+
+Try it
+
+cd C:\Users\subin\OneDrive\Desktop\django-ecommerce\backend
+uv run python manage.py preview_emails
+Open the links it prints to see every design in your browser. Then test with real emails:
+
+1. Order #15 won't work: it's already delivered, which is the last step. Place a new order as sujithatk0@gmail.com.
+2. Paid, shipped, delivered: in the admin, mark that order Paid, then Shipped, then Delivered. That's three emails, one per click.
+3. Cancelled: place another order and cancel it as the customer. You should get the "as you asked" version.
+4. Password reset: on the sign-in page, click "Forgot your password?".
+
+Check
+
+- Each step's email arrives within a few seconds, with the product photos, $ prices and working buttons. Watch them go out with docker compose logs -f worker.
+- uv run python manage.py test shows Ran 61 tests and OK.
+
+When the emails look right, commit and push. CI will check it again on GitHub:
+cd ..
+git add .
+git commit -m "HTML emails with product pictures: confirmation, paid, shipped, delivered, cancelled, password reset; preview command"
+git push
+git add . includes your learned.md notes changes too; that's fine if you want them in this commit.
+
+✻ Baked for 3m 24s · done 2:58 PM
+
+> al
+
+
+※ recap: We're adding product reviews and ratings to ShopLite, and the backend part (step 1) is finished, with all 73 tests passing. Next, try posting a review for order #15's Ceramic Teapot at /api/products/ceramic-teapot/reviews/.
+
+> [Image #22] this is the first time im seeing this window
+[Image #22]
+
+This is the Django REST framework's own sign-in page. It belongs to the API test pages at 127.0.0.1:8000/api/..., not to the shop.
+
+- Two sign-ins, same accounts: the React shop (port 5173) signs you in with the JWT tokens we built. This page signs you in with a normal Django session instead, the same kind the Django admin uses. The accounts and passwords are the same in both.
+- Why use it: once you're signed in here, the API pages in the browser act as that user. That's how you can post a review without the React frontend, which comes in step 2.
+- "Please enter a correct email address and password" means that email and password don't match. For subin@ontash.net the likely reason is that you changed that password earlier when testing the password reset, so the old one no longer works. Use the new one you chose then.
+※ recap: We're adding product reviews and ratings to ShopLite, and the backend part (step 1) is finished, with all 73 tests passing. Next, try posting a review for order #15's Ceramic Teapot at /api/products/ceramic-teapot/reviews/.
+
+> [Image #22] this is the first time im seeing this window
+[Image #22]
+
+This is the Django REST framework's own sign-in page. It belongs to the API test pages at 127.0.0.1:8000/api/..., not to the shop.
+
+- Two sign-ins, same accounts: the React shop (port 5173) signs you in with the JWT tokens we built. This page signs you in with a normal Django session instead, the same kind the Django admin uses. The accounts and passwords are the same in both.
+- Why use it: once you're signed in here, the API pages in the browser act as that user. That's how you can post a review without the React frontend, which comes in step 2.
+- "Please enter a correct email address and password" means that email and password don't match. For subin@ontash.net the likely reason is that you changed that password earlier when testing the password reset, so the old one no longer works. Use the new one you chose then.
+  - If you've forgotten it, you can set a new one in PowerShell, from the backend folder: uv run python manage.py changepassword subin@ontash.net
+- Use the right account for this test: sign in as sujithatk0@gmail.com, not the admin account. That customer owns order #15, which is delivered and contains the Ceramic Teapot, so only they can review it. The admin account has no delivered order with the Teapot, so it would get the 403 "after delivery" message (which is also worth trying).
+
+After signing in, open http://127.0.0.1:8000/api/products/ceramic-teapot/reviews/ and continue from step 3. To switch users, use the Log out link at the top right of the API pages, or go to /api-auth/logout/.
+
+
+
+… +13 lines
+
+Now lint, tests and the full build:
+
+  Ran 2 shell commands
+
+Everything passes. One check that lint didn't find any new warnings in my code (before this step there were exactly 2, both in shadcn's own files):
+
+  Ran 1 shell command
+
+Step 2, the frontend, is done. The shop now shows ratings and reviews, and customers can write, edit and delete their own. The checks pass: 18 frontend tests (6 new), lint (only the 2 old shadcn warnings) and the build.
+
+What & why
+
+Stars everywhere a shopper decides.
+- Product cards: a card now shows small stars with the average and the count, e.g. ★★★★☆ 4.5 (3), once a product has reviews. Products without reviews stay clean, with no empty stars.
+- Product page: a summary under the name. Clicking it jumps down to the reviews.
+- Sorting: a new Top rated option in the sort menu.
+
+A "Customer reviews" section at the bottom of each product page. Reviews load 5 at a time with a Show more reviews button, so a popular product doesn't load hundreds at once. Each review shows the stars, the name ("Ana S."), a Verified purchase badge, the date and the comment. That badge is truthful, because only customers with a delivered order can review.
+
+A "your review" box that adapts to who is looking:
+- Not signed in: "Bought this product? Sign in to write a review". After signing in you come straight back to this section.
+- Signed in, but not delivered to you: "You can review this product once an order with it has been delivered to you."
+- Delivered, not reviewed yet: the form, with five clickable stars (hover to preview) and an optional comment with a character counter. If you forget the stars, it says "Choose a rating" without asking the server.
+- Already reviewed: your review, with Edit and Delete. Delete asks "are you sure?" first. If the shop has hidden your review, you see a note saying so.
+
+After you save or delete a review, the page refreshes the review list, the average on the product page, and the stars on the product cards, so nothing shows old numbers.
+
+Delivered orders get a shortcut: each item has a Write a review link that opens the product page scrolled down to the reviews. Only the customer who placed the order sees it, not staff looking at the order.
+
+For people using screen readers: the stars read out as "Rated 4.5 out of 5", and the picker works like a set of radio buttons ("4 stars, selected").
+
+Try it
+
+1. Open the shop at http://localhost:5173 and sign in as sujithatk0@gmail.com.
+2. Open Orders → #15 (delivered). Click Write a review next to the Ceramic Teapot, and the page opens at the reviews.
+3. If you posted a review in step 1 through the API page, you'll see it under "Your review". Try Edit (change the stars) and Delete, then write a new one.
+4. Go to Products: the Teapot card shows stars. Choose Top rated in the sort menu and it comes first.
+5. Sign out and open the Teapot again: you see the review and a "Sign in to write a review" link.
+6. Sign in as another customer, for example customer@example.com: you see the "once an order with it has been delivered" message.
+7. In the Django admin, go to Reviews, untick Is visible and save. In the shop the review and its stars disappear for everyone, but its author still sees it, marked as hidden.
+
+Check
+
+- The stars and numbers update right after each save or delete, without reloading the page.
+- In the frontend folder, npm test shows Tests 18 passed.
+
+A heads-up: the main JavaScript file is now 499.9 kB, just under the 500 kB size at which Vite shows its warning. The product page loads immediately (it's one of the pages everyone sees), and it now includes the reviews code. If a later feature tips it over, we can load the reviews section only when it's needed, like we did for the admin pages.

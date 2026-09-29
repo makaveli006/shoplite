@@ -1,12 +1,20 @@
 Ideas for what to build next
 
 Roughly from easiest to biggest:
-2. Nicer HTML emails (order confirmation with pictures), plus "your order has shipped" emails when an admin marks it shipped
 3. Auto-reload when a page file is missing after a new version, the gap from your last question
 4. Product reviews and ratings: a new model, API, and frontend section; only customers who bought the product may review
 5. Wishlist, a close cousin of the cart
-6. Automatic tests on every push with GitHub Actions, running both test suites
 7. Real payments with Stripe: the order becomes paid when Stripe confirms, through a "webhook" (a message Stripe sends to your API)
 8. Deploy it: Gunicorn + Nginx/Caddy + HTTPS on a small cloud server, following the checklist from Lesson 16.1
 9. Live stock updates on product pages with WebSockets (Django Channels)
 10. Better search with PostgreSQL full-text search (typo tolerance, ranking)
+
+
+
+1. Reviews and ratings (my recommendation): star ratings and comments on products. Only customers whose order was delivered can review, and only once per product. It's a new model, API, permissions and a product-page section, so it practises everything so far, and CI guards the rest of the shop while you build it.
+2. Wishlist: a "save for later" heart on products. It's a smaller cousin of the cart.
+3. Stripe payments: real card payments in test mode. The order turns "paid" automatically when Stripe confirms it, and your new "Payment received" email goes out by itself.
+4. Deploy it: put ShopLite on a real server with HTTPS, then add the automatic deploy job from your README. This needs a small paid server, about $5–6 a month.
+5. Better search: PostgreSQL full-text search, which ranks results and handles word forms. For example, "mugs" finds "Mug".
+6. Live stock updates: stock numbers change on product pages instantly, without reloading, using WebSockets.
+7. Auto-reload after a new version: fixes the rare "page file missing" error after you deploy. It's small, and matters mainly once the site is deployed.

@@ -45,8 +45,10 @@ class ProductSerializer(serializers.ModelSerializer):
         queryset=Category.objects.all(),
         write_only=True,
     )
-    # Computed, read-only value that is not a database column.
+    # Computed, read-only values that are not database columns.
     in_stock = serializers.SerializerMethodField()
+    average_rating = serializers.SerializerMethodField()  # e.g. 4.3, or null without reviews
+    review_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -62,6 +64,8 @@ class ProductSerializer(serializers.ModelSerializer):
             'is_active',
             'category',
             'category_id',
+            'average_rating',
+            'review_count',
             'created_at',
             'updated_at',
         ]
@@ -70,6 +74,15 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_in_stock(self, obj):
         return obj.stock > 0
+
+    # The two ratings are filled in by ProductViewSet's query; a product that was just
+    # created (or loaded elsewhere) has none, so fall back to "no reviews".
+    def get_average_rating(self, obj):
+        average = getattr(obj, 'average_rating', None)
+        return None if average is None else round(average, 1)
+
+    def get_review_count(self, obj):
+        return getattr(obj, 'review_count', 0)
 
     def validate_image(self, value):
         """Field-level validation: runs for the "image" field only (after DRF/Pillow

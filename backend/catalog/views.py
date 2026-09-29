@@ -1,4 +1,5 @@
-from django.db.models import Count, ProtectedError
+from django.db.models import Avg, Count, FloatField, ProtectedError, Q, Value
+from django.db.models.functions import Coalesce
 from rest_framework import status, viewsets
 from rest_framework.response import Response
 
@@ -53,12 +54,24 @@ class ProductViewSet(viewsets.ModelViewSet):
     filterset_class = ProductFilter
     # ?search=mug -> case-insensitive "contains" match in any of these fields
     search_fields = ['name', 'description', 'category__name']
-    # ?ordering=price, ?ordering=-price, ?ordering=name ... (only these fields are allowed)
-    ordering_fields = ['price', 'name', 'created_at']
-    ordering = ['-created_at']  # default when no ?ordering= is given
+    # ?ordering=price, ?ordering=-price, ?ordering=name, ?ordering=-rating (top rated) ...
+    # Only these fields are allowed.
+    ordering_fields = ['price', 'name', 'created_at', 'rating']
+    # Default when no ?ordering= is given. Also needed because of the annotate() below:
+    # Meta.ordering is ignored in GROUP BY queries.
+    ordering = ['-created_at']
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        # Each product's rating, calculated in the same query from its visible reviews
+        # (reviews hidden by staff don't count).
+        visible = Q(reviews__is_visible=True)
+        queryset = super().get_queryset().annotate(
+            review_count=Count('reviews', filter=visible),
+            average_rating=Avg('reviews__rating', filter=visible),  # None when there are no reviews
+            # For sorting by "top rated": products without reviews count as 0, so they come
+            # last. (PostgreSQL would put the empty values first when sorting high to low.)
+            rating=Coalesce(Avg('reviews__rating', filter=visible), Value(0.0), output_field=FloatField()),
+        )
         # Staff can see (and therefore edit) hidden products; everyone else only active ones.
         if self.request.user.is_staff:
             return queryset

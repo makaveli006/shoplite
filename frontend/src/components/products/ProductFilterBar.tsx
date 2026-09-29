@@ -13,6 +13,7 @@ const SORT_OPTIONS = [
   { value: 'price', label: 'Price: low to high' },
   { value: '-price', label: 'Price: high to low' },
   { value: 'name', label: 'Name: A to Z' },
+  { value: '-rating', label: 'Top rated' },
 ]
 
 export interface FilterValues {
