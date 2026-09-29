@@ -1,8 +1,18 @@
+import re
+from unittest import mock
+
+from django.conf import settings
+from django.contrib.auth.tokens import default_token_generator
+from django.core import mail
+from django.core.cache import cache
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 from rest_framework.test import APITestCase
 
 from core.testing import PASSWORD, client_for, make_user
 
 from .models import User
+from .tasks import send_password_reset_email
 
 
 class RegisterTests(APITestCase):
@@ -75,3 +85,84 @@ class LoginAndMeTests(APITestCase):
         self.assertEqual(self.user.last_name, 'Silva')
         self.assertFalse(self.user.is_staff)
         self.assertEqual(self.user.email, 'ana@example.com')
+
+
+# In tests the reset email must never really be queued in Redis.
+QUEUE_RESET_EMAIL = 'accounts.views.send_password_reset_email.delay'
+NEW_PASSWORD = 'Brand-New-Garden-77'
+
+
+class PasswordResetTests(APITestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = make_user('ana@example.com')
+
+    def setUp(self):
+        cache.clear()  # the request limit (5 per hour) is counted in the cache
+
+    def request_reset(self, email):
+        return client_for().post('/api/auth/password-reset/', {'email': email}, format='json')
+
+    def confirm(self, uid, token, password=NEW_PASSWORD):
+        return client_for().post(
+            '/api/auth/password-reset/confirm/',
+            {'uid': uid, 'token': token, 'new_password': password},
+            format='json',
+        )
+
+    def valid_link_parts(self):
+        return urlsafe_base64_encode(force_bytes(self.user.pk)), default_token_generator.make_token(self.user)
+
+    def test_request_queues_an_email_for_an_existing_account(self):
+        with mock.patch(QUEUE_RESET_EMAIL) as queue_email:
+            response = self.request_reset('ANA@example.com')
+        self.assertEqual(response.status_code, 200)
+        queue_email.assert_called_once()
+        user_id, link = queue_email.call_args.args
+        self.assertEqual(user_id, self.user.pk)
+        self.assertTrue(link.startswith(f'{settings.FRONTEND_URL}/reset-password/'))
+
+    def test_unknown_email_gets_the_same_answer_and_no_email(self):
+        with mock.patch(QUEUE_RESET_EMAIL) as queue_email:
+            known = self.request_reset('ana@example.com')
+            unknown = self.request_reset('nobody@example.com')
+        self.assertEqual(unknown.status_code, 200)
+        self.assertEqual(unknown.data, known.data)
+        queue_email.assert_called_once()  # only for the known account
+
+    def test_requests_are_limited(self):
+        with mock.patch(QUEUE_RESET_EMAIL):
+            codes = [self.request_reset('ana@example.com').status_code for _ in range(6)]
+        self.assertEqual(codes, [200, 200, 200, 200, 200, 429])
+
+    def test_email_contains_a_working_link(self):
+        with mock.patch(QUEUE_RESET_EMAIL) as queue_email:
+            self.request_reset('ana@example.com')
+        send_password_reset_email(*queue_email.call_args.args)  # run the job directly, no worker needed
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['ana@example.com'])
+        uid, token = re.search(r'/reset-password/([^/\s]+)/([^/\s]+)', mail.outbox[0].body).groups()
+        self.assertEqual(self.confirm(uid, token).status_code, 200)
+
+    def test_new_password_works_and_link_only_works_once(self):
+        uid, token = self.valid_link_parts()
+
+        self.assertEqual(self.confirm(uid, token).status_code, 200)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(NEW_PASSWORD))
+        # Changing the password invalidates the link.
+        self.assertEqual(self.confirm(uid, token, 'Another-Garden-88').status_code, 400)
+
+    def test_invalid_link_is_refused(self):
+        uid, _ = self.valid_link_parts()
+        response = self.confirm(uid, 'not-a-real-token')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('invalid or has expired', response.data['token'][0])
+        self.assertEqual(self.confirm('garbage', 'garbage').status_code, 400)
+
+    def test_weak_new_password_is_refused(self):
+        uid, token = self.valid_link_parts()
+        response = self.confirm(uid, token, '123')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('new_password', response.data)

@@ -77,6 +77,9 @@ export function LoginPage() {
               onChange={(event) => setPassword(event.target.value)}
               errors={fieldErrors.password}
             />
+            <Link to="/forgot-password" className="-mt-2 self-end text-sm text-muted-foreground underline underline-offset-4">
+              Forgot your password?
+            </Link>
           </CardContent>
           <CardFooter className="mt-4 flex-col gap-3">
             <Button type="submit" className="w-full" disabled={loginMutation.isPending}>

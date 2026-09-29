@@ -24,6 +24,14 @@ export const router = createBrowserRouter([
       { path: 'products/:slug', Component: ProductDetailPage }, // ":slug" = any product's web name
       { path: 'login', lazy: async () => ({ Component: (await import('@/pages/LoginPage')).LoginPage }) },
       { path: 'register', lazy: async () => ({ Component: (await import('@/pages/RegisterPage')).RegisterPage }) },
+      {
+        path: 'forgot-password',
+        lazy: async () => ({ Component: (await import('@/pages/ForgotPasswordPage')).ForgotPasswordPage }),
+      },
+      {
+        path: 'reset-password/:uid/:token', // the link from the reset email
+        lazy: async () => ({ Component: (await import('@/pages/ResetPasswordPage')).ResetPasswordPage }),
+      },
 
       // Signed-in customers only
       {

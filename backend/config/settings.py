@@ -152,7 +152,15 @@ REST_FRAMEWORK = {
         'rest_framework.filters.SearchFilter',
         'core.filters.StableOrderingFilter',
     ],
+    # Request limits for views that set a "throttle_scope" (e.g. password reset emails).
+    'DEFAULT_THROTTLE_RATES': {
+        'password_reset': os.getenv('PASSWORD_RESET_RATE', '5/hour'),
+    },
 }
+
+# Password reset: the frontend page that emails link to, and how long a link works.
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+PASSWORD_RESET_TIMEOUT = int(os.getenv('PASSWORD_RESET_TIMEOUT', str(60 * 60)))  # seconds (1 hour)
 
 # CORS (django-cors-headers): which OTHER websites' JavaScript may call this API.
 # The React dev server runs on http://localhost:5173. Comma-separated in .env.

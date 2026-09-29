@@ -13,4 +13,8 @@ urlpatterns = [
     path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     # GET / PATCH the logged-in user's profile
     path('me/', views.MeView.as_view(), name='me'),
+    # POST {"email"} -> a reset link is emailed (if the account exists)
+    path('password-reset/', views.PasswordResetRequestView.as_view(), name='password-reset'),
+    # POST {"uid", "token", "new_password"} -> the new password is set
+    path('password-reset/confirm/', views.PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
 ]

@@ -28,6 +28,20 @@ export async function registerAccount(values: RegisterData): Promise<void> {
   await api.post('/auth/register/', values)
 }
 
+export async function requestPasswordReset(email: string): Promise<string> {
+  const { data } = await api.post<{ detail: string }>('/auth/password-reset/', { email })
+  return data.detail
+}
+
+export async function confirmPasswordReset(uid: string, token: string, newPassword: string): Promise<string> {
+  const { data } = await api.post<{ detail: string }>('/auth/password-reset/confirm/', {
+    uid,
+    token,
+    new_password: newPassword,
+  })
+  return data.detail
+}
+
 export interface ProfileData {
   first_name: string
   last_name: string

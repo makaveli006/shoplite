@@ -7563,3 +7563,230 @@ Tell me:
 3. whether Step 3 showed a new file loading when you opened the admin.
 
 Next: Lesson 16.2, the final lesson. Upgrading Django from 5.1.7 to 5.2 LTS (Long-Term Support, which gets security fixes for years), with uv. I've already checked it: all 41 backend tests pass on Django 5.2.17, and the helper libraries move forward too. After that comes a review of everything you've built and learned, and ideas for what to build next.
+
+
+
+  Ran 1 shell command, wrote 2 memories
+
+Phase 16, Lesson 16.2: Upgrading to Django 5.2 LTS, and wrap-up
+
+Lesson 16.1 committed as 7018841.
+
+What & why
+
+At the very start you chose Django 5.1.7, and I noted then that Django 5.1 no longer gets security fixes. Real projects regularly move to newer versions, and the safest target is an LTS (Long-Term Support) release. Django 5.2 LTS receives security fixes until April 2028.
+
+Upgrades are exactly where your automated tests pay off. Without them, you'd have to click through the whole shop again and hope. With them, one command tells you whether everything still behaves the same.
+
+I did a trial run beforehand, without touching your project:
+- With Django 5.2, uv's resolver moves Django to 5.2.17, and two helper libraries can move forward too: Django REST Framework 3.18.1 and django-filter 26.1. Remember that django-filter was held back at 25.1 because of the 5.1 pin (Lesson 4.5).
+- On those versions, all 41 backend tests passed, and Django found no database changes needed (no new migrations).
+
+What happens during the upgrade
+
+1. Change the rule in pyproject.toml from "exactly 5.1.7" to "any 5.2.x". uv resolves again, updates uv.lock, and installs Django 5.2.17. Keeping it to 5.2.x means future uv runs pick up 5.2 security fixes but never jump to Django 6 by surprise.
+2. Let the two helpers move up. uv never upgrades a package you didn't ask about, even if a newer one would fit. You tell it which ones to reconsider.
+3. Run the safety net:
+   - Django's system check
+   - "are any database changes needed?"
+   - all 41 backend tests
+4. Rebuild the worker. The worker container installed its packages from uv.lock when it was built (Lesson 8.2). The lock file changed, so it must be rebuilt, or it would keep running Django 5.1 while your Windows side runs 5.2.
+5. Try the shop once, and commit.
+
+The frontend isn't affected. It only talks to the API, and the API's answers don't change.
+
+---
+
+▶️ Your turn
+
+Stop Django (Ctrl+C in its window) and pause OneDrive during the installs.
+
+Step 1: Upgrade Django
+
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce\backend"
+uv add "django>=5.2,<5.3"
+→ - django==5.1.7 / + django==5.2.17
+
+Step 2: Let the helper libraries move up
+
+uv lock --upgrade-package djangorestframework --upgrade-package django-filter
+uv sync
+uv tree --depth 1
+- uv lock --upgrade-package ... means "for these packages only, choose the newest version that still fits all the rules".
+- uv sync makes .venv match the new lock file (Lesson 2.1).
+- uv tree --depth 1 should show django v5.2.17, djangorestframework v3.18.1, and django-filter v26.1.
+
+Step 3: Run the safety net
+
+uv run python manage.py check
+uv run python manage.py makemigrations --check --dry-run
+uv run python manage.py test
+→ no issues, then No changes detected, then Ran 41 tests … OK.
+
+If a test had failed, this is where you'd have found out. The failure message names the exact behaviour that changed, and you'd fix it (or stay on 5.1) before anything went live. That's the safety net from Phase 9 doing its job.
+
+Step 4: Rebuild the worker
+
+cd ..
+docker compose up -d --build worker
+docker compose exec worker python -c "import django; print(django.get_version())"
+→ the build re-installs from the new lock file, and the worker prints 5.2.17.
+
+Step 5: Try the shop
+
+Start Django again (cd backend, then uv run python manage.py runserver) and the frontend (npm run dev):
+- The Django admin at http://127.0.0.1:8000/admin/ opens (its look may differ slightly).
+- The shop works: browse, sign in as Ana, add to cart, check out.
+- The worker log (docker compose logs --tail 20 worker) shows the confirmation email.
+
+Step 6: Commit
+
+git add backend
+git commit -m "Upgrade to Django 5.2 LTS (5.2.17), DRF 3.18.1, django-filter 26.1"
+
+---
+
+🎓 What you built
+
+ShopLite, a complete full-stack shop:
+
+Browser: React 19 + TypeScript (Vite 8, Tailwind 4, shadcn/ui + Radix, React Router, TanStack Query, Axios)
+   │  JSON over HTTP, login token in the Authorization header, CORS
+   ▼
+Django 5.2 + Django REST Framework ── JWT login, permissions, validation, pagination, search, filtering
+   │                                  │ "send the confirmation email" (after the order is really saved)
+   ▼                                  ▼
+PostgreSQL 16 (Docker)            Redis (Docker) ──▶ Celery worker (Docker) ──▶ email
+
+For customers: browse, search, filter, sort, and paginate products; product pages; register and sign in; stay signed in with silent token renewal; a cart with stock checks and problem messages; checkout with frozen prices, all-or-nothing saving, and protection against two people buying the last item; a confirmation email; order history; cancelling pending orders with stock returned.
+
+For staff: manage products (with pictures), categories, and orders in the shop's own admin area; the full Django admin too. Every rule is enforced by the API, and you proved it with the six 403s.
+
+Safety nets: 41 backend tests (including the race and the "crash halfway" case), 12 frontend tests, 90% backend coverage, and production-ready settings.
+
+What you learned along the way
+
+- Tools: uv (projects, virtual environments, lock files, dev-only packages, upgrades), npm, Git, Docker and Docker Compose, PowerShell
+- Django: projects and apps, models and relationships, migrations, the ORM, the admin, custom user models, settings from .env, management commands, tests
+- APIs: REST, serializers and validation, ViewSets and routers, permissions, JWT, CORS, pagination, file uploads
+- Databases: PostgreSQL, transactions, locking against race conditions, constraints as a safety net
+- Background work: Redis queues, Celery workers, "only after it's saved"
+- Frontend: React components, TypeScript, routing, data fetching and caching, forms, authentication flows, accessible UI components, testing
+- Debugging habits: read the last line of a traceback first, tell 401 from 403, check which server or Python you're talking to, and test before you trust
+
+Ideas for what to build next
+
+Roughly from easiest to biggest:
+1. Password reset by email, using the worker and email setup you already have
+2. Nicer HTML emails (order confirmation with pictures), plus "your order has shipped" emails when an admin marks it shipped
+3. Auto-reload when a page file is missing after a new version, the gap from your last question
+4. Product reviews and ratings: a new model, API, and frontend section; only customers who bought the product may review
+5. Wishlist, a close cousin of the cart
+6. Automatic tests on every push with GitHub Actions, running both test suites
+7. Real payments with Stripe: the order becomes paid when Stripe confirms, through a "webhook" (a message Stripe sends to your API)
+8. Deploy it: Gunicorn + Nginx/Caddy + HTTPS on a small cloud server, following the checklist from Lesson 16.1
+9. Live stock updates on product pages with WebSockets (Django Channels)
+10. Better search with PostgreSQL full-text search (typo tolerance, ranking)
+
+---
+
+✅ Final checkpoint
+
+Tell me:
+1. the three versions from uv tree --depth 1,
+2. the Ran 41 tests … OK line on Django 5.2, and
+3. the Django version the worker printed.
+
+Then the course is complete. 🎉 If you'd like to continue with any of the "next" ideas, or go back over a topic that didn't fully land, just say which one.
+
+✻ Worked for 1m 1s · done 1:08 PM
+
+
+
+
+Quick status: done and verified. The build, lint, and the 12 frontend tests pass, and the two new pages load on demand like the others. Here's the lesson.
+
+Extension 1: Password reset by email
+
+The Django 5.2 upgrade is committed (2007b7c). I confirmed django 5.2.17, DRF 3.18.1, and django-filter 26.1 on Windows, and 5.2.17 in the worker too. 🎉 The course itself is complete, and this is the first extension.
+
+What & why
+
+Customers forget passwords. Without a reset option, a forgotten password means a lost customer, or an admin changing passwords by hand. Every real shop has a "Forgot your password?" link. It must be convenient, and also safe: it's one of the most attacked parts of any website.
+
+What happens now
+
+1. On Sign in, there's a new "Forgot your password?" link. It opens a page asking for an email address.
+2. The customer enters their email and presses Send reset link. The shop always answers the same way: "If an account exists for this email, we have sent a link to reset the password." That's true whether or not the account exists, so this page can't be used to discover which email addresses are customers (the same idea as the login message in Lesson 5.1).
+3. If the account exists, the background worker (Phase 8) sends an email with a personal link, for example http://localhost:5173/reset-password/Ng/cz6x…. The two parts of the link are the account (in a web-safe form) and a one-time code. The code:
+   - is signed with the secret key, so it can't be guessed or forged (like the JWT signature in Lesson 5.1)
+   - expires after 1 hour
+   - stops working as soon as the password changes, so the link works exactly once
+4. Clicking the link opens Choose a new password: type it twice. The shop compares the two boxes before sending, so a typo doesn't waste the link. The server then checks the link and applies the same password rules as registration (Lesson 5.2). On success: "Your password has been changed. You can sign in now.", and the customer is taken to Sign in.
+5. Problems are explained:
+   - an old, used, or broken link → "This reset link is invalid or has expired. Please request a new one." with a Request a new link button
+   - a weak password → the usual messages under the field
+6. Protection against abuse: someone could type a victim's email address a thousand times and flood their inbox. So each visitor may ask for at most 5 reset emails per hour. After that, they're told to wait (the server answers 429 Too Many Requests).
+
+One honest limitation: a password change doesn't sign out devices that are already signed in. Their login tokens keep working until they expire (up to 7 days for the refresh token), because JWTs aren't stored on the server (Lesson 5.1). Shops that need "sign out everywhere" add a token blacklist, which could be a future extension.
+
+What I built
+
+- Backend: two new API addresses, request a reset and set the new password; the reset email job for the worker; the 5-per-hour limit; the frontend address and link lifetime as settings in .env; and 7 new tests, now 48 in total, all passing:
+  - an email is queued only for existing accounts
+  - an unknown email gets the identical answer
+  - the 6th request in an hour is refused
+  - the emailed link really works
+  - a link works only once
+  - broken links are refused
+  - weak passwords are refused
+- Frontend: the Forgot password page, the Choose a new password page (both loaded on demand), and the link on Sign in.
+
+---
+
+▶️ Your turn
+
+Step 1: Restart Django and the worker
+
+In the Django window: Ctrl+C, then uv run python manage.py runserver. Then, from the project root:
+cd "$env:USERPROFILE\OneDrive\Desktop\django-ecommerce"
+docker compose restart worker
+docker compose logs --tail 30 worker
+The worker only reads the code when it starts (Lesson 8.2), so it has to be restarted to learn the new job. In its start-up list, under [tasks], you'll now see accounts.tasks.send_password_reset_email next to the order confirmation.
+
+(Optional: add FRONTEND_URL=http://localhost:5173 and PASSWORD_RESET_TIMEOUT=3600 to backend\.env, as shown in .env.example. Those are the defaults anyway.)
+
+Step 2: Reset Bob's password
+
+Keep the worker log open in a separate window: docker compose logs -f --tail 0 worker. Start the frontend (npm run dev) if it isn't running.
+1. Open Sign in → Forgot your password? → enter bob@example.com → Send reset link. You get "Check your email".
+2. In the worker log, the email "Reset your ShopLite password" appears, with the link.
+3. Copy the link from the log into the browser. You're on Choose a new password.
+4. Type two different passwords: "The two passwords are not the same." No request is sent.
+5. Type 123 twice: the server's password messages appear.
+6. Type Bob-New-Garden-2026 twice → "Your password has been changed." → you're on Sign in. Sign in as Bob with the new password. The old one (Sunny-Garden-42) no longer works.
+
+Step 3: The protections
+
+1. Open the same link again and try to set another password. You get "This reset link is invalid or has expired." with Request a new link.
+2. On Forgot password, enter nobody@example.com. You get the same "Check your email" message, and no email in the worker log.
+3. Request a link a few more times (reload the page between tries). The 6th request within an hour gives "Too many requests. Please wait a while and try again."
+
+(The limit is counted by Django's in-memory cache, so restarting Django resets it. On a real server with several processes, the cache would live in Redis instead.)
+
+Step 4: Run all the tests
+
+cd backend
+uv run python manage.py test
+cd ..\frontend
+npm test
+npm run build
+→ Ran 48 tests … OK, 12 passed, build OK.
+
+Step 5: Commit
+
+cd ..
+git add backend frontend
+git commit -m "Password reset by email: one-time signed links, rate limit, reset pages; 7 new tests"
+
+---
