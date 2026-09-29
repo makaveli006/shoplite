@@ -70,6 +70,7 @@ INSTALLED_APPS = [
     'orders',
     'reviews',
     'wishlist',
+    'payments',
 ]
 
 MIDDLEWARE = [
@@ -190,8 +191,18 @@ EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = env_bool('EMAIL_USE_TLS', True)
 
-# Currency shown in emails ($12.50). Keep it the same as VITE_CURRENCY in frontend/.env.
-SHOP_CURRENCY = os.getenv('SHOP_CURRENCY', 'USD').upper()
+# The shop's currency: used in emails (₹12.50) and for payments. Keep it the same as
+# VITE_CURRENCY in frontend/.env. Razorpay accounts in India take payments in INR.
+SHOP_CURRENCY = os.getenv('SHOP_CURRENCY', 'INR').upper()
+
+# Razorpay (online payments). Test keys start with rzp_test_ and move no real money.
+# Key id: public (the browser needs it to open the payment window).
+# Key secret and webhook secret: private, only ever used on the server.
+RAZORPAY_KEY_ID = os.getenv('RAZORPAY_KEY_ID', '')
+RAZORPAY_KEY_SECRET = os.getenv('RAZORPAY_KEY_SECRET', '')
+RAZORPAY_WEBHOOK_SECRET = os.getenv('RAZORPAY_WEBHOOK_SECRET', '')
+# Without keys the shop still works; only "Pay now" answers "online payment is not set up".
+PAYMENTS_ENABLED = bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
 
 # JSON Web Tokens (djangorestframework-simplejwt)
 SIMPLE_JWT = {

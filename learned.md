@@ -9076,3 +9076,328 @@ Check
 - In the frontend folder, npm test shows Tests 18 passed.
 
 A heads-up: the main JavaScript file is now 499.9 kB, just under the 500 kB size at which Vite shows its warning. The product page loads immediately (it's one of the pages everyone sees), and it now includes the reviews code. If a later feature tips it over, we can load the reviews section only when it's needed, like we did for the admin pages.
+
+
+
+
+
+omponents/reviews/` (`MyReviewBox` picks sign-in / form / own review / not-eligible). `ProductReviews` (lazy-loaded by `ProductDetailPage`)
+ scrolls to `#reviews` when the address has that hash.
+
+### Wishlist (`wishlist` app)
+- **Backend:** `WishlistItem` is unique per (user, prohlist/` (GET a plain, unpaginated list, newest first; PO
+ST `{product_id}`) and `wishlist/<product_id>/` (DELETE, **addressed by product id**). Both writes are idempotent: POST returns 201, or 200
+ if the product was already saved (with an `IntegrityError` fallback); DELETE always returns 204 and only touches the signed-in user's rows
+. Only active products can be saved, but items stay listed with `is_active: false` if the product is hidden later.
+
+  Ran 1 shell command
+
+The wishlist is built as one piece, backend and frontend, with tests, and everything passes:
+
+- Backend: 84 tests OK (11 new), and no missing migrations. The new wishlist table is already created in your development database.
+- Frontend: 28 tests pass (10 new). Lint shows only the 2 old shadcn warnings, and the build has no size warning.
+
+What & why
+
+The heart. Every product card and product page now has a heart:
+- Signed in: click it and the product is saved. The heart turns red instantly: the shop updates the screen first and then asks the server. If the server
+  says no, for example because the network is down, the heart or message appears.
+- Not signed in: the heart sends you to sign in, then brings you back to the same page, including your filters.
+- On the product page: there's a "Save to wishlist" / "Saved" button, and it's there even when the product is out of stock. That's the most common reason to save something.
+
+Header and page. A heart icon next to the cart shows how many products you've saved. It opens My wishlist, which lists each saved product with its
+picture, price and stock:
+- Add to cart puts one in your cart and keeps it in the wishlist, as you chose.
+- Remove takes it off the wishlist.
+- Products the shop has hidden since you saved them show as "N to cart switched off. They aren't silently removed, so you can
+  see why.
+
+Safe against double clicks. Saving something that's already saved, or removing something that's already gone, is simply accepted. The database also allows each product only once per wishlist, like the review rule.
+
+The product card fix. A button isn't allowed inside a link: screen readers get confused, and clicking the heart would also open the product page. So the heart now sits on top of the card's corner, next to the link rather than inside it. A test checks this.
+
+Tests can now pretend someone is signed in. The frontend test helper got a "who is signed in" option, so anything showing a heart can be tested both signed in and signed out. The old tests work unchanged.
+
+The shop's first download got smaller. The product page now loads the reviews section only when it's shown, the way the admin pages already load. The main JavaScript file went from 499.9 kB to 486.5 kB, even with the wishlist added.
+
+Docs. The README has the wishlist in its feature list, folder list and API table. CLAUDE.md has a new Wishlist section, updated test notes, and an updated line about where the reviews section scrolls.
+
+Try it
+
+(runserver and npm run dev pick up the changes automatically.
+
+1. Signed out: click a heart on the Products page. You should land on sign-in, then come back to Products after signing in.
+2. Save a few: hearts turn red immediately and the header count goes up. Refresh the page and they stay red.
+3. Out of stock: open an out-of-stock product. The Save to wis
+4. My wishlist: click the header heart. Try Add to cart: the cart count goes up and the product stays saved. Then try Remove.
+5. Hidden products: in the Django admin, untick Is active on a saved product. The wishlist shows it as "No longer available", with Add to cart off.
+6. Sign out: the wishlist count disappears.
+
+Commit and push
+
+git add .
+git commit -m "Wishlist: heart on products, My wishlist page, header count; idempotent API; reviews section lazy-loaded; 21 new tests"
+git push
+gh run watch
+Only your own notes (IDEAS-NEXT.md) changed besides my files.
+
+✻ Baked for 10m 44s · done 4:04 PM
+
+※ recap: Your ShopLite shop now has a wishlist (heart buttons plus a My wishlist page), and all backend and frontend tests pass. Next, try it in the browser, then commit and push so GitHub's automatic checks run.
+
+> whats next
+
+
+
+Context
+
+The user wants real card checkout, the biggest missing piece of the shop: Razorpay (they're in India), in test mode (no real money, no KYC or bank account needed). When Razorpay confirms a payment, the order becomes paid by itself, and the existing "Payment received" email goes out automatically.
+
+Safety rules from the user:
+- All work happens on feature/payment-gateway (already created and checked out).
+- Never merge into main and never commit or push to main without their explicit permission. This is saved in memory.
+- CI runs through a draft pull request.
+- No Claude attribution in commits. Never read or print the secret values in backend/.env.
+
+Decisions made:
+- Currency: INR (₹).
+- Payment window: Razorpay's window opens right after "Place order". If it's closed or the payment fails, the order stays Pending with a Pay now button.
+- Webhooks: they reach this PC through zrok 2.0.5 with the reserved name shoplitesubin. The user has already done zrok2 enable and zrok2 create name shoplitesubin.
+
+Researched facts:
+- Standard Checkout flow: the server must create a Razorpay order first (Orders API, amount in paise; payments without an order_id are auto-refunded). The browser loads https://checkout.razorpay.com/v1/checkout.js and opens new Razorpay({key, amount, currency, name, order_id, handler, prefill, modal: {ondismiss}}). On success, handler receives razorpay_payment_id, razorpay_order_id and razorpay_signature. The server checks that signature as hmac_sha256(order_id + "|" + payment_id, key_secret). rzp.on('payment.failed', …) reports failures.
+- Webhooks:
+  - Events: payment.captured, payment.failed, order.paid. The payment entity is at payload.payment.entity (id, order_id, amount, currency, status, error_description).
+  - Signature: the header X-Razorpay-Signature is HMAC-SHA256 of the raw body with the webhook secret. Never parse the body before checking it.
+  - The x-razorpay-event-id header identifies duplicates, which happen normally.
+  - Ports 80/443 only, and localhost and ngrok.io are blocked, which is why zrok is used.
+- Test cards (any future expiry, any CVV; a mock bank page offers Success/Failure buttons): Visa 4386 2894 0766 0153, Mastercard 5267 3181 8797 5449 (domestic). The docs page shown listed US and international cards; confirm the domestic numbers on Razorpay's test-card page during step 2.
+- Python package: the official razorpay 2.0.1 (March 2026), which only depends on requests. It isn't installed yet: uv add razorpay.
+- Existing code to reuse:
+  - orders.services.change_status(order_id, PAID) already locks the order, checks the allowed step (pending → paid), and queues the "Payment received" email after commit (ORDER_EMAILS in orders/tasks.py).
+  - Calling it for an order that's already paid raises OrderStatusError, so the payment code must check the status first, which keeps it idempotent.
+  - orders.views.order_response() returns a full order.
+  - Frontend: CheckoutPage currently navigates to /orders/:id?placed=1; OrderDetailPage shows CancelOrderButton when status === 'pending' && customer_email === user.email; useCheckout and useCancelOrder show the cache pattern.
+  - There's no script-loader helper and no Content-Security-Policy.
+
+How it works (plain-language summary for the lessons)
+
+1. "Place order" creates the order (Pending, as today). The shop's server asks Razorpay to open a Razorpay order for the exact amount (the server decides the amount, never the browser).
+2. Razorpay's payment window opens on top of the shop. The customer pays with a test card.
+3. Two independent confirmations arrive, and whichever comes first marks the order paid; the second finds it already paid and does nothing:
+   - Checkout confirmation: the window hands the browser a signed receipt, and the browser forwards it to the server. The server checks the signature with the secret key, so a fake "I paid" is rejected. This gives the customer an instant "Paid" on screen.
+   - Webhook: Razorpay's own server calls the shop's server directly, through zrok in development. This works even if the customer closed the tab or lost internet right after paying. It's the reliable backbone.
+4. Marking paid goes through change_status, so the "Payment received" email is sent exactly once.
+
+Step 0: Setup (the user does the dashboard parts; nothing secret enters the chat)
+
+- Razorpay Dashboard:
+  - Switch to Test Mode, go to Account & Settings → API Keys, and Generate Test Key.
+  - Put the keys into backend/.env as RAZORPAY_KEY_ID=rzp_test_… and RAZORPAY_KEY_SECRET=….
+  - Check Payment Capture is automatic (Account & Settings → Payment capture), so test payments are captured straight away.
+- Currency: SHOP_CURRENCY=INR in backend/.env, and VITE_CURRENCY=INR in frontend/.env. The prices keep their numbers and show as ₹.
+- What I do:
+  - uv add razorpay.
+  - In settings: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET (all os.getenv(..., '')), PAYMENTS_ENABLED = bool(key id and secret), and SHOP_CURRENCY defaulting to INR.
+  - Document all of these in backend/.env.example (empty values) and frontend/.env.example (VITE_CURRENCY=INR).
+
+Step 1: Backend, the new payments app (start and checkout confirmation)
+
+- payments/models.py:
+  - Payment: order (FK → Order, PROTECT, related_name='payments'), razorpay_order_id (unique), razorpay_payment_id (blank), amount (paise, PositiveInteger), currency, status (created / paid / failed), confirmed_via (checkout / webhook, blank; records which confirmation arrived first, for learning and debugging), error_description, created_at, updated_at. It has a needs_refund property: paid while the order is cancelled.
+  - WebhookEvent: event_id (unique), event, received_at. It's the duplicate-delivery guard, used in step 3. Migration payments/0001.
+- payments/gateway.py: the only file that talks to Razorpay.
+  - client() builds razorpay.Client(auth=(KEY_ID, KEY_SECRET)).
+  - create_razorpay_order(order, amount_paise) calls order.create({amount, currency, receipt: 'order_<id>', notes: {shoplite_order_id}}) with a request timeout.
+  - payment_signature_is_valid(order_id, payment_id, signature) computes the HMAC with hmac.compare_digest, which is timing-safe.
+  - webhook_signature_is_valid(raw_body, signature) checks webhook signatures.
+  - Razorpay/network errors are raised as one PaymentGatewayError.
+- payments/services.py:
+  - amount_in_paise(Decimal): Decimal('49.99') → 4999, exact with no float.
+  - start_payment(order):
+    - The order must be pending; paid or cancelled raises PaymentError.
+    - The amount must be at least ₹1 (Razorpay's minimum).
+    - It reuses the order's latest created Payment if the amount matches; otherwise it creates a Razorpay order and a Payment row.
+  - mark_paid(razorpay_order_id, razorpay_payment_id, via, amount=None), @transaction.atomic:
+    - Lock the Payment with select_for_update. An unknown id is logged and ignored.
+    - Already paid: do nothing, which makes it idempotent.
+    - An amount that doesn't match is logged as an error and the order isn't paid.
+    - Otherwise set paid, the payment id and confirmed_via.
+    - Then, if the order is still pending, call change_status(order.pk, PAID), which queues the "Payment received" email.
+    - If the order was cancelled meanwhile, it stays cancelled and gets logged plus flagged needs_refund in the admin.
+  - mark_failed(razorpay_order_id, payment_id, description): records the failure unless the payment is already paid. The order stays pending, so the customer can retry.
+- payments/views.py and payments/urls.py (included under api/):
+  - POST payments/start/ {order_id} (signed in):
+    - It only works for the customer's own order (404 otherwise), and 400 if the order isn't pending.
+    - It returns 503 "Online payment is not set up" when there are no keys, and 502 when Razorpay can't be reached.
+    - The response has {key_id, razorpay_order_id, amount, currency, name: 'ShopLite', description: 'Order #N', prefill: {name, email, contact}, test_mode}. The key id is public by design; the secret never leaves the server.
+  - POST payments/verify/ {razorpay_order_id, razorpay_payment_id, razorpay_signature} (signed in):
+    - The Payment must belong to the customer's own order (404 otherwise).
+    - A bad signature returns 400 and nothing changes.
+    - A good signature calls mark_paid(..., via='checkout') and returns the full order (order_response).
+- payments/admin.py: read-only PaymentAdmin showing order, customer, amount in ₹, status, confirmed_via, the Razorpay ids, a "⚠ needs refund" column, and filters. Plus a read-only WebhookEventAdmin.
+- Tests in payments/tests.py: override_settings with dummy keys; mock payments.gateway.create_razorpay_order; signatures computed in the test with the dummy secret; QUEUE_EMAIL = 'orders.services.send_order_email.delay' plus captureOnCommitCallbacks.
+  - start:
+    - 401 when signed out
+    - someone else's order → 404
+    - pending → 200 with key, order id, amount 4999 and INR
+    - a second start reuses the Razorpay order (the gateway is called once)
+    - paid or cancelled order → 400
+    - no keys → 503
+    - gateway error → 502
+  - verify:
+    - valid → order paid and exactly one "paid" email queued
+    - wrong signature → 400 and still pending
+    - another user → 404
+    - verifying twice → 200 with still one email
+  - amount_in_paise
+  - About 14 tests.
+
+Step 2: Frontend, pay right after placing the order
+
+- src/lib/razorpay.ts:
+  - loadRazorpay() adds the checkout.js script once, remembering the promise, and rejects with a clear message if it can't load.
+  - Minimal TypeScript types for window.Razorpay, its options, and the success and failure responses.
+- src/api/payments.ts: startPayment(orderId), verifyPayment(response).
+- src/hooks/usePayment.ts: usePayOrder(order) runs the whole sequence.
+  a. Call startPayment, then loadRazorpay, then open new Razorpay({...}).
+  b. handler: calls verifyPayment, then setQueryData(['order', id], order), invalidates ['orders'], and shows the toast "Payment received".
+  c. modal.ondismiss: toast "Payment not completed. You can pay any time from this page."
+  d. payment.failed: error toast with Razorpay's description.
+  e. It exposes pay() and a busy state.
+- src/components/orders/PayButton.tsx: "Pay ₹X now" plus a small Test mode badge when the key is a test key. It's disabled while busy.
+- OrderDetailPage.tsx:
+  - PayButton appears next to CancelOrderButton under the same condition (pending and the customer's own order).
+  - When the address has ?pay=1, it opens Razorpay automatically once, guarded by a ref, then removes pay=1 from the address so a refresh doesn't reopen it.
+  - The "just placed" banner says "Complete the payment to confirm your order" while pending.
+- CheckoutPage.tsx:
+  - After success it navigates to /orders/:id?placed=1&pay=1.
+  - The button text becomes "Place order and pay".
+  - The note becomes "You'll pay securely with Razorpay (test mode: no real money is taken)".
+- Tests:
+  - lib/razorpay.test.ts: the script is added only once and resolves; it rejects when it fails to load.
+  - components/orders/PayButton.test.tsx (mock @/api/payments and a fake Razorpay class that captures its options):
+    - clicking calls startPayment(15) and opens Razorpay with the key, order id and amount
+    - calling handler then calls verifyPayment with the three values
+    - dismissing doesn't call verify and re-enables the button
+    - a 503 from start shows the error message
+  - pages/OrderDetailPage.test.tsx:
+    - a pending order of mine shows "Pay now"; a paid order doesn't; someone else's pending order (staff view) doesn't
+    - ?pay=1 opens Razorpay once
+  - About 8 tests.
+- The user's check: place an order → Razorpay opens → pay with the test card and click Success → the order shows Paid, and the "Payment received" email arrives. Also try Failure, and closing the window, then Pay now.
+
+Step 3: Webhook, the reliable backbone
+
+- POST payments/webhook/: AllowAny, authentication_classes = [] (so no CSRF check), no JWT.
+  a. Read the raw request.body and check X-Razorpay-Signature against RAZORPAY_WEBHOOK_SECRET. A missing or bad signature, or no secret configured, returns 400.
+  b. Inside one transaction, WebhookEvent.get_or_create(event_id=x-razorpay-event-id). A duplicate returns 200 without repeating any work. If processing fails, the event isn't recorded, so Razorpay's retry can succeed.
+  c. payment.captured / order.paid → mark_paid(order_id, payment_id, via='webhook', amount=payment.amount).
+  d. payment.failed → mark_failed. Other events are acknowledged with 200 and otherwise ignored.
+  e. Handled and ignored events return 200, so Razorpay stops retrying.
+- Dev tunnel:
+  - Run zrok2 share public http://localhost:8000 -n public:shoplitesubin in its own terminal and note the printed address.
+  - Add that host to DJANGO_ALLOWED_HOSTS in backend/.env.
+  - In the Razorpay Dashboard (Test mode): Account & Settings → Webhooks → Add with URL https://<zrok address>/api/payments/webhook/, a strong secret (also placed in backend/.env as RAZORPAY_WEBHOOK_SECRET), and the events payment.captured, payment.failed, order.paid.
+- Tests:
+  - a valid payment.captured pays the order with one email and confirmed_via='webhook'
+  - the same event id twice → processed once
+  - bad or missing signature → 400 and nothing changes
+  - order.paid works
+  - an amount that doesn't match → not paid
+  - payment.failed records the failure and the order stays pending
+  - an unknown Razorpay order → 200 and ignored
+  - paid after the customer cancelled → the order stays cancelled and needs_refund is set
+  - verify first, then the webhook → one email in total
+  - About 10 tests.
+- The user's check:
+  - Pay again. The zrok terminal shows Razorpay's calls, and the Django admin Webhook events list fills up.
+  - The dashboard's webhook page shows delivered (200).
+  - To see the webhook alone doing the job: on the mock bank page, click Success and then close the tab straight away. The order still turns Paid, with confirmed_via = webhook, and the email arrives.
+
+Step 4: Docs, CI through a draft PR, no merge
+
+- README.md: Features ("Online payments with Razorpay (test mode)…"), a short "Payments (Razorpay test mode)" setup section (keys, currency, zrok, webhook, test cards), and the API table rows for payments/start/, payments/verify/ and payments/webhook/.
+- CLAUDE.md: a Payments section covering the two confirmations, idempotent mark_paid, raw-body webhook check, event dedup, gateway.py as the only Razorpay caller, tests mocking the gateway, and the branch rule.
+- Git (all on feature/payment-gateway): the user commits after each step. After step 1:
+  - git push -u origin feature/payment-gateway
+  - gh pr create --draft --base main --title "Razorpay payments (test mode)" --body "...", with no Claude lines
+  - CI runs on every push to the branch. The PR stays a draft; merging only when the user explicitly says so.
+
+Out of scope (noted for later)
+
+- Unpaid orders keep their stock reserved. Later: auto-cancel unpaid orders after, e.g., 30 minutes with Celery beat.
+- Refunds are done in the Razorpay dashboard; the admin only flags needs_refund.
+- Going live needs KYC, live keys and a live-mode webhook on the real domain; no tunnel in production.
+
+Verification (overall)
+
+- uv run python manage.py test all OK (84 + about 24); makemigrations --check clean.
+- npm run lint (only the 2 old shadcn warnings), npm test, npm run build (no size warning; the Razorpay script is loaded from Razorpay's site only when paying, so it doesn't add to our bundle).
+- Manual in the browser (the user): success, failure, window closed then Pay now, and the webhook-only path; each paid order sends exactly one "Payment received" email; the Django admin shows Payments and Webhook events.
+- Draft PR CI green; main untouched (git log main unchanged).
+
+
+
+Step 1 is done. A quick check of which payment settings your backend/.env already has. This shows names only, never values:
+
+  Ran 1 shell command
+
+Step 1, the backend part of payments, is done on feature/payment-gateway. All 98 backend tests pass, including 14 new payment tests that never contact Razorpay, and no migrations are missing. I applied the new tables to your development database. Nothing has been committed, and main is untouched.
+
+What & why
+
+A new payments app, a separate part of the shop, like reviews and wishlist. It stores two things:
+- Payments: each attempt to pay an order. It records the Razorpay reference numbers, the amount, whether it's waiting, paid or failed, and which confirmation arrived first.
+- Webhook events: used in step 3, so a message Razorpay sends twice is only handled once.
+
+One file talks to Razorpay (gateway.py). It opens a Razorpay "order" for the amount and checks Razorpay's signatures. The rest of the shop only calls this file, which is also why the tests can swap it for a fake and never touch the internet.
+
+Starting a payment (/api/payments/start/).
+- Checks: the order must be yours, still pending, and at least ₹1 (Razorpay's minimum).
+- Amount: the server asks Razorpay to open a payment for that amount, taken from our database, never from the browser, so nobody can pay ₹1 for a ₹5,000 order.
+- What the browser gets: everything it needs to open the payment window: the public key, Razorpay's order number, the amount in paise, and your name and email to pre-fill the form. The secret key never leaves the server.
+- Trying again: if you close the window and try again, the same Razorpay order is reused.
+- Clear answers: "online payment is not set up" when there are no keys, and "can't reach the payment service" if Razorpay is down.
+
+Confirming a payment (/api/payments/verify/).
+- The receipt: after you pay, Razorpay's window gives the browser a receipt signed with your secret key. The server recalculates that signature, so a made-up "I paid" is rejected. Only a real receipt marks the order Paid.
+- The email: marking paid goes through the same status code as the admin's "Mark paid", so the "Payment received" email goes out automatically, exactly once.
+- Arriving twice: if a confirmation arrives twice (the webhook will be the second one in step 3), the second changes nothing.
+- Paid after cancelling: the order stays cancelled, the payment is marked "needs refund" in the admin, and you'd refund it from Razorpay's dashboard.
+
+Currency is now INR by default, and the .env.example files explain the new Razorpay settings. Two older tests now say which currency they expect, so they pass whatever your .env contains.
+
+Django admin has read-only Payments and Webhook events pages. Payments are a record of what Razorpay did, so staff can't edit them.
+
+Your turn: step 0 in the Razorpay Dashboard
+
+1. Switch the dashboard to Test Mode (the toggle at the top). The bank-details form you saw is only for live mode.
+2. Go to Account & Settings → API Keys and click Generate Test Key. Copy both values.
+3. Add these lines to backend/.env yourself (don't paste the keys here):
+SHOP_CURRENCY=INR
+RAZORPAY_KEY_ID=rzp_test_...
+RAZORPAY_KEY_SECRET=...
+4. In frontend/.env, change the currency line to VITE_CURRENCY=INR.
+5. Restart Django (Ctrl+C, then uv run python manage.py runserver) and Vite (Ctrl+C, then npm run dev). They only read .env when they start.
+
+Check that Django can use your Razorpay test keys
+
+1. Place a normal order in the shop as a customer. It stays Pending; the pay button comes in step 2.
+2. Sign in as that customer at http://127.0.0.1:8000/api-auth/login/ and open http://127.0.0.1:8000/api/payments/start/.
+3. Post {"order_id": <your order number>}. You should get 200, with razorpay_order_id starting order_, the amount in paise, and "test_mode": true.
+4. In the Razorpay Dashboard, under Transactions → Orders, that order appears with receipt order_<number>.
+
+When that works, commit, push the branch, and open the draft pull request. That's never a merge; main stays unchanged:
+cd C:\Users\subin\OneDrive\Desktop\django-ecommerce
+git branch --show-current          # must say feature/payment-gateway
+git add .
+git commit -m "Payments step 1: Razorpay payments app (start + verified checkout confirmation), INR default; 14 tests"
+git push -u origin feature/payment-gateway
+gh pr create --draft --base main --title "Razorpay payments (test mode)" --body "Work in progress on feature/payment-gateway. Do not merge."
+Then tell me the result. Step 2 is the pay button and the Razorpay window in the shop.
+
+✻ Brewed for 9m 8s · done 5:11 PM
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── razorpay-payment-integration ─
+> done, pr created go step 2
