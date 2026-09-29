@@ -224,6 +224,19 @@ health check: is the site answering?
 deployment complete ✅, the new version is live
 ```
 
+#### Where the production credentials are stored
+
+They are split between two places, and neither of them is the code in this repository:
+
+| Where | What is stored there | Why there |
+|---|---|---|
+| **GitHub Secrets** (repo → Settings → Secrets and variables → Actions) | only what GitHub needs to *reach* the server: the SSH private key, the server address, the SSH user name | the CD job needs them to connect. GitHub keeps them encrypted, hides them in logs, and nobody can read them back after saving (not even you) |
+| **On the server**, in `backend/.env` (created once by hand, readable only by the app's user) | the app's own secrets: `DJANGO_SECRET_KEY`, the database password, `EMAIL_HOST_PASSWORD`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_DEBUG=False`, … | Django reads them when it starts on the server. They never pass through GitHub, so a leaked GitHub account or workflow log can't expose them |
+
+So GitHub only holds the *key to the server's door*. The secrets of the shop itself stay inside the server,
+and deployments never touch that `.env` file: `git pull` leaves it alone because `.env` is git-ignored.
+`VITE_API_URL` is not a secret (every visitor's browser can see it), so it can simply sit in `frontend/.env` on the server.
+
 ## API overview
 
 All addresses start with `/api/`. Send the access token as `Authorization: Bearer <token>`.

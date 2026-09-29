@@ -8242,3 +8242,668 @@ Tell me:
 3. the Ran 48 tests line.
 
 Then pick the next extension if you'd like. Remaining ideas from the list: nicer HTML emails and "your order has shipped" emails, auto-reload after a new version, product reviews, wishlist, GitHub + automatic
+
+
+
+        self.assertEqual(response.status_code, 200)
+        queue_email.assert_called_once_with(self.user.pk)
+        queue_email.assert_called_once()
+        user_id, link = queue_email.call_args.args
+        self.assertEqual(user_id, self.user.pk)
+        self.assertTrue(link.startswith('http://localhost:5173/reset-password/'))
+
+    def test_unknown_email_gets_the_same_answer_and_no_email(self):
+        with mock.patch(QUEUE_RESET_EMAIL) as queue_email:
+
+● Update(accounts\tests.py)
+Added 3 lines, removed 1 line
+        self.assertEqual(codes, [200, 200, 200, 200, 200, 429])
+
+    def test_email_contains_a_working_link(self):
+        send_password_reset_email(self.user.pk)  # run the job directly, no worker needed
+        with mock.patch(QUEUE_RESET_EMAIL) as queue_email:
+            self.request_reset('ana@example.com')
+        send_password_reset_email(*queue_email.call_args.args)  # run the job directly, no worker needed
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['ana@example.com'])
+
+  Read 1 file
+
+The expected address shouldn't be hard-coded in the test, because it comes from settings. I'll use the setting instead.
+
+● Update(accounts\tests.py)
+Added 1 line, removed 1 line
+        queue_email.assert_called_once()
+        user_id, link = queue_email.call_args.args
+        self.assertEqual(user_id, self.user.pk)
+        self.assertTrue(link.startswith('http://localhost:5173/reset-password/'))
+        self.assertTrue(link.startswith(f'{settings.FRONTEND_URL}/reset-password/'))
+
+    def test_unknown_email_gets_the_same_answer_and_no_email(self):
+        with mock.patch(QUEUE_RESET_EMAIL) as queue_e
+
+● Update(accounts\tests.py)
+Added 1 line
+import re
+from unittest import mock
+
+from django.conf import settings
+from django.contrib.auth.tokens import default_token_generator
+from django.core import mail
+from django.core.cache import cache
+
+  Ran 1 shell command
+
+All 48 tests pass. The worker only reads the code when it star it uses the new version.
+
+  Ran 1 shell command
+
+Those log lines are from before the restart. I'll check that the restarted worker is ready.
+
+  Ran 1 shell command
+
+I fixed it: the reset link was being rejected because of a time zone mismatch, not because anything was wrong with the link. All 48 backend tests pass,
+and I've restarted the worker.
+
+What was going on
+
+The reset link has the time it was made hidden inside it. When someone uses it, the website works out how old the link is, and refuses it if it's more than an hour old.
+
+Two different programs were handling the link:
+
+- The worker in Docker made the link. Its clock runs on world time (UTC), so it wrote down 08:12.
+- Django on Windows checked the link. Its clock runs on India
+
+Django compared its 13:45 with the 08:12 written in the link and concluded the link was about 5½ hours old. So it rejected a link you had opened a minute after it was sent. You can see the two clocks disagree in the check I ran above.
+
+What I changed
+
+- Who makes the link: Django on Windows now makes it when you press "Send reset link", so the same clock makes it and checks it. The worker's only job now is to put the ready-made link into the email and send it. This matches how the order emails work: the web server decides what goes in the email, and the worker just delivers it.
+- Tests: I updated them to follow the real path: ask for a reset, run the email job, then use the link from the email.
+
+What you need to do
+
+1. Stop and start Django: press Ctrl+C, then run uv run python manage.py runserver.
+2. Ask for a fresh link: go to Forgot password and send a new link. The old emails still contain bad links and won't work.
+3. Use the new link: open it from the new email and choose a new password. It should take you to the sign-in page with a success message.
+
+In real deployments, servers are usually all set to UTC, so this mismatch doesn't happen. Another fix would have been to set the Docker worker to India
+time. I avoided that because it's fragile: if one program chancomes back.
+
+Something you should know about your password: when this conversation resumed, the whole backend/.env file was loaded into my view, including the Gmail
+app password you had hidden. I haven't repeated it or used it t to see it, so treat it as exposed. Go to your Google Account→ Security → App passwords, delete that app password, create a new one, and paste it into backend/.env yourself. Then restart Django and the worker (docker compose restart worker).
+
+When the reset works for you, it's ready to commit.
+
+✻ Sautéed for 5m 16s · done 1:48 PM
+
+※ recap: You're adding password reset by email to ShopLite, and I fixed the link being rejected as expired. Next, restart Django, request a fresh reset link, and open it from the new email.
+
+> it worked continue to next feature lets
+
+    VITE v8.3.1  ready in 1315 ms
+
+    ➜  Local:   http://localhost:5173/
+    ➜  Network: use --host to expose
+    ➜  press h + enter to show help
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\frontend> ^C
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce\frontend> cd ..
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce> git add .
+  warning: in the working copy of 'backend/.env.example', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'backend/accounts/serializers.RLF the next time Git touches it
+  warning: in the working copy of 'backend/accounts/tests.py', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'backend/accounts/urls.py', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'backend/accounts/views.py', Le next time Git touches it
+  warning: in the working copy of 'frontend/src/api/auth.ts', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'frontend/src/pages/LoginPage.tsx', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'frontend/src/router.tsx', LF next time Git touches it
+  warning: in the working copy of 'backend/accounts/tasks.py', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'frontend/src/pages/ForgotPasswordPage.tsx', LF will be replaced by CRLF the next time Git touches it
+  warning: in the working copy of 'frontend/src/pages/ResetPasswordPage.tsx', LF will be replaced by CRLF the next time Git touches it
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce> git commit -m "Password reset by email: one-time signed links, rate limit, reset pages; 7 new tests"
+  [main 34c19bd] Password reset by email: one-time signed links, rate limit, reset pages; 7 new tests
+   14 files changed, 701 insertions(+), 3 deletions(-)
+   create mode 100644 IDEAS-NEXT.md
+   create mode 100644 backend/accounts/tasks.py
+   create mode 100644 frontend/src/pages/ForgotPasswordPage.tsx
+   create mode 100644 frontend/src/pages/ResetPasswordPage.tsx
+  PS C:\Users\subin\OneDrive\Desktop\django-ecommerce>
+
+  lets push this into github
+
+  Ran 1 shell command
+
+This project isn't connected to GitHub yet, so there's nowhere to push to. Before anything goes online, I'll check the whole history for secrets and Claude credits.
+
+  Ran 1 shell command
+
+Only the example files were ever committed, and every commit is yours. I'll run one more check for secret values inside committed files, without printing them.
+
+  Ran 1 shell command
+
+That "True" may just be the '...' placeholder, or the line in settings.py. I'll check which files matched, hiding the values.
+
+  Ran 1 shell command
+
+History's clean—no real passwords or keys were ever committed, just a placeholder and an env-var reference. Now I need you to create a repo on your GitHub
+account (makaveli006) before I can push, and let me know if yo
+
+● User answered Claude's questions:
+· Who should be able to see the ShopLite repository on GitHub? → Public
+· What should the repository be called? → shoplite
+
+Public it is. Since anyone will be able to read the repo, I'll quickly check the current files for the dev passwords you shared earlier.
+
+  Ran 3 shell commands
+
+I found your local admin password "ontash123" exposed in learnits, which is risky to publish. Since the repo hasn't beenpushed yet, I'll clean it from those commits (keeping commit messages the same) before going public.
+
+● User answered Claude's questions:
+· Should I remove the password "ontash123" from learned.md in the last 3 commits before pushing publicly? → Remove it (Recommended)
+
+I'll back up the current state to a branch first, then rewrite the three commits.
+
+● Bash(cd "/c/Users/subin/OneDrive/Desktop/django-ecommerce" && git status --porcelain && git branch backup-before-cleanup && FILTER_BRANCH_SQUELCH_WARNING=1 git filte…)
+Rewrite 34c19bd07032363d459df657921b5142af60a7a7 (3/3) (4 sedicted)    warning: in the working copy of 'learned.md',
+LF will be replaced by CRLF the next time Git touches it
+
+Ref 'refs/heads/main' was rewritten
+1 file changed (binary, mode only or too large to show)
+(what this command changed; a convenience view, not a review or audit of the command)
+(timeout 5m)
+
+Now I'll check that the password is gone and that nothing else
+
+  Ran 1 shell command
+
+The only change is that single line, and your commits and messages are otherwise identical. I'll delete the backup (it still contains the password), then create the public repo and push.
+
+  Ran 2 shell commands
+
+Pushed. Now for the next feature: let me check the ideas list we saved earlier.
+
+  Ran 1 shell command
+
+Pushed to GitHub with clean history — I scrubbed the leaked ontash123 reference before going public, and only you're listed as author/contributor. Your work email still appears in learned.md and tools/race_demo.py; let me know if you'd like that removed too, and which feature to tackle next.
+
+● User answered Claude's questions:
+· Which feature should we build next? → GitHub Actions (Recommended)
+
+GitHub Actions it is. Following your rules, I'll check the current docs for the uv GitHub Action first.
+
+  Ran 2 shell commands
+
+The docs pin the uv action to an exact version (v10.1.0, by its commit ID). I'll check the latest versions of the other official actions I need, and your local tool versions so the CI matches.
+
+  Ran 2 shell commands
+
+I'll pin the uv action to the exact commit for v10.2.0 since no short v10 label exists, per its docs. Next I'll check which settings the backend needs to start up in CI, where there's no .env file.
+
+  Searched for 1 pattern
+
+I'll set CI with a test secret key, DJANGO_DEBUG=True, and DB credentials, then check for Redis dependency risk by running tests locally against a dead Redis port to catch any hangs.
+
+  Ran 1 shell command
+
+CI only needs PostgreSQL since tests don't rely on Redis. I'll now check for missing model migrations and how the frontend behaves when VITE_API_URL isn't
+set.
+
+  Ran 1 shell command
+
+The frontend doesn't break without .env, but I'll set the address in CI anyway. One last docs check, for the Node action (v7 is new):
+
+  Ran 1 shell command
+
+Docs confirmed. Last check: the coverage settings, so CI can report coverage the same way you do locally.
+
+  Ran 1 shell command
+
+Everything is checked. Now I'll write the workflow file.
+
+● Write(~\OneDrive\Desktop\django-ecommerce\.github\workflows\ci.yml)
+Wrote 108 lines to ..\.github\workflows\ci.yml
+# Continuous integration: on every push to main (and every pull request), GitHub starts two
+# fresh Linux machines and checks the backend and the frontend at the same time.
+# The result shows on GitHub as a green tick or a red cross next to the commit.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+… +98 lines
+
+Before handing over, I'll run the same frontend steps locally so the first CI run has a good chance of passing. The backend steps already passed above.
+
+  Ran 1 shell command
+
+The lint step printed two warnings about shadcn's own files. Warnings shouldn't fail the build, but I'll confirm the exit code.
+
+  Ran 1 shell command
+
+I've written the automatic checks, and every step passes on your PC. GitHub hasn't run them yet: that happens when you push.
+
+What & why
+
+Until now, you've had to remember to run the tests yourself before committing. From now on, every time you push to GitHub (or someone opens a pull request), GitHub rents two fresh Linux computers for a few minutes and checks your project on them, both at the same time:
+
+- Backend computer:
+  - It starts an empty PostgreSQL 16, like the database container in your Docker setup.
+  - It installs Python 3.12 and the exact package versions from your lock file, using uv.
+  - It checks that every model change has a migration, which ckemigrations" mistake.
+  - It runs all 48 tests and prints the coverage report.
+- Frontend computer:
+  - It installs Node 22 and the exact packages from package-lock.json.
+  - It runs lint, the 12 tests, and the full TypeScript check
+
+If anything fails, the commit on GitHub gets a red ❌ and you get an email. If everything passes, it gets a green ✅. This matters more with every feature we add: if a new feature breaks an old one, you find out within minutes instead of weeks later.
+
+What I changed
+
+I added one new file, .github/workflows/ci.yml. GitHub automatically looks in that folder for instructions.
+
+- Settings: the file gives the test computers the settings your backend/.env normally provides. They're throwaway values (fake secret key, test database
+  password) that only exist inside those machines, so nothing
+- No Redis: I tested with Redis switched off and the tests don't need it, so CI doesn't start one.
+- Your PC: I ran the same steps locally and all passed: 48 backend tests, 12 frontend tests, lint, build, and migrations up to date. The two lint warnings
+  come from shadcn's own files; they're only notes and don't f
+
+Your turn
+
+cd C:\Users\subin\OneDrive\Desktop\django-ecommerce
+git add .github
+git commit -m "CI with GitHub Actions: backend tests on Postgrld"
+git push
+gh run watch
+
+gh run watch shows the run live in your terminal. Or open https://github.com/makaveli006/shoplite/actions in your browser and click the run to see each
+step.
+
+What to expect
+
+The first run takes about 2–3 minutes. Later runs are faster bmbered. You should see two jobs, Backend (Django tests) andFrontend (lint, tests, build), both green. In the Backend job, open the "Run the tests" step and you'll see the same Ran 48 tests … OK you see locally.
+
+If something goes red, paste me the failing step's output and we'll go through it together.
+
+✻ Churned for 7m 30s · done 2:02 PM
+
+> If a test is failed after i pushed what will happen only say in one sentence
+
+Your push still goes through and nothing is undone, but GitHub puts a red ❌ on that commit and emails you which test failed, so you fix it and push again.
+
+✻ Cogitated for 3s · done 2:02 PM
+
+※ recap: We're building your ShopLite store feature by feature, and right now we're adding automatic tests that GitHub runs on every push. Your next step is to commit and push the new workflow file, then watch the run with `gh run watch`.
+
+> create a README .MD
+
+I'll check a few real details first (setup files, commands, folders) so the README is accurate.
+
+  Ran 1 shell command
+
+Two things stand out: the CI file is already committed (good), and there's a tracked file called session.txt I haven't seen before. It's public now, so I'll check what it contains.
+
+  Ran 1 shell command
+
+That file is harmless: it only contains the command to resume this chat. Now I'll check the result of your CI run, so the README badge will show the real status.
+
+  Ran 1 shell command
+
+CI is green ✅. Before writing the API section, I'll check the exact addresses.
+
+  Ran 1 shell command
+
+I have everything I need. Writing the README now.
+
+● Write(~\OneDrive\Desktop\django-ecommerce\README.md)
+Wrote 189 lines to ..\README.md
+# ShopLite
+
+[![CI](https://github.com/makaveli006/shoplite/actions/workflows/ci.yml/badge.svg)](https://github.com/makaveli006/shoplite/actions/workflow
+s/ci.yml)
+
+Customers browse products, fill a cart and check out; staff manage products, categories and orders.
+
+## Features
+
+- **Catalog**: categories and products with images, search, filters (category, price range), sorting and pagination
+… +182 lines
+
+Before calling it done, I'll check three claims in the README against the code: the HTTP method of the status endpoint, the browsable API, and the order statuses.
+
+  Searched for 1 pattern
+
+I found one mistake: the status endpoint uses PATCH, not POST. Also, the browsable API isn't limited to DEBUG mode. Fixing both.
+
+● Update(~\OneDrive\Desktop\django-ecommerce\README.md)
+Added 2 lines, removed 2 lines
+| `POST orders/checkout/` | signed in | turn the cart into an order |
+| `GET orders/`, `GET orders/{id}/` | signed in | your orders (staff: all orders) |
+| `POST orders/{id}/cancel/` | order owner | cancel a
+| `POST orders/{id}/status/` | staff | move an order to its next status |
+| `PATCH orders/{id}/status/` | staff | change an order's status (only allowed next steps) |
+
+With `DEBUG=True`, every endpoint can also be exploreable API).
+Every endpoint can also be explored in the browser (DRF's browsable API): open an address such as <http://127.0.0.1:8000/api/products/>.
+
+## Production notes
+
+
+I've written README.md in the project root. It's not committed yet.
+
+What's in it
+
+- Top: a live CI badge that shows ✅ or ❌ from your GitHub Actions. Your first run passed, so it will show green.
+- Overview: the feature list, tech stack, a diagram of how ther structure.
+- Setup and tests: step-by-step instructions for Windows PowerShell, from cloning to a running shop, plus how to run all the tests.
+- API table: every endpoint with who can use it. I checked it  the code and fixed one method (PATCH, not POST, for changingan order's status).
+- Production notes: a short checklist of what to change before going live.
+
+I left out your email and all passwords, since the repo is public.
+
+Commit and push
+
+cd C:\Users\subin\OneDrive\Desktop\django-ecommerce
+git add README.md
+git commit -m "README: features, stack, setup, tests, API overview"
+git push
+
+I used git add README.md instead of git add . because learned.md also has unsaved changes (your notes); add it too if you want it in this commit. After pushing, open https://github.com/makaveli006/shoplite and the README appears below the file list.
+
+The session.txt file in the repo is harmless: it only contains the command to resume this chat. You can keep it or remove it.
+
+✻ Churned for 1m 36s · done 2:14 PM
+
+> CI
+  =========
+  git push
+     ↓
+  GitHub creates temporary Ubuntu machine
+     ↓
+  install dependencies
+     ↓
+  start PostgreSQL
+     ↓
+  Django checks + tests + coverage
+     ↓
+  frontend lint + tests + build
+     ↓
+  PASS ✅
+     ↓
+  temporary machine destroyed
+
+  CI passes ✅
+     ↓
+  Deployment job starts
+     ↓
+  Connect to production server
+     ↓
+  Pull / receive the new application code
+     ↓
+  Install/update backend dependencies
+     ↓
+  Install/update frontend dependencies
+     ↓
+  Build React production files
+     ↓
+  Run Django migrations
+     ↓
+  Run collectstatic
+     ↓
+  Restart backend service
+     ↓
+  Restart/reload web server if needed
+     ↓
+  Application is now running with the new version
+     ↓
+  Deployment complete ✅
+
+  git push to main
+     ↓
+  CI runs
+     ↓
+  Backend tests pass
+  Frontend tests/build pass
+     ↓
+  CD starts
+     ↓
+  GitHub Actions connects to server through SSH
+     ↓
+  server gets latest code
+     ↓
+  backend:
+  uv sync --frozen
+  uv run python manage.py migrate
+  uv run python manage.py collectstatic --noinput
+     ↓
+  frontend:
+  npm ci
+  npm run build
+     ↓
+  copy frontend/dist to Nginx web root
+     ↓
+  restart Gunicorn/Django service
+     ↓
+  restart Celery worker
+     ↓
+  reload Nginx
+     ↓
+  health check
+     ↓
+  PASS ✅
+
+  CI = verify that the code is good
+
+  CD = take the verified code and put it on the real server
+  add this to README ALSO BEACUSE THIS IS THE FIRST TIME IM DOING CI AND CD
+
+I'll add a CI/CD section to the README. I'll adjust your diagrch what really happens. First, our CI runs the backend andfrontend on two separate machines at the same time, not one after the other. Second, CD (automatic deployment) isn't set up yet, so the README will say it's planned rather than live.
+
+  Read 1 file
+
+● Update(~\OneDrive\Desktop\django-ecommerce\README.md)
+Added 68 lines, removed 1 line
+npm run build     # type check + production build
+```
+
+GitHub Actions runs all of these on every push to `ma
+GitHub Actions runs all of these on every push to `main` and on pull requests (see the next section).
+
+## CI/CD
+
+- **CI (Continuous Integration)** = check that the code is good, automatically, on every push.
+- **CD (Continuous Deployment)** = take the code that passed CI and put it on the real server, automatically.
+
+### CI: set up ✅
+
+Defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). It runs on every push to `main` and on every pull request:
+
+```
+git push
+   ↓
+GitHub starts two temporary Ubuntu machines, at the s
+   ↓                                          ↓
+Backend machine                            Frontend machine
+  start PostgreSQL 16                        install Node.js 22
+  install Python 3.12 + locked packages      install locked packages (npm ci)
+    (uv sync --locked)                       lint (ox
+  Django system check                        tests (Vitest)
+  every model change has a migration?        type check + production build
+  tests + coverage report
+   ↓                                          ↓
+both pass → green ✅ next to the commit on GitHub
+anything fails → red ❌ and an email saying which step failed
+   ↓
+the temporary machines are deleted
+```
+
+A failed CI run doesn't undo or block the push: the code is already on GitHub. It warns you
+that something is broken, so you fix it and push agai
+
+### CD: not set up yet (planned)
+
+This is how deployment will work once the app has a ron a cloud machine):
+
+```
+git push to main
+   ↓
+CI runs (backend tests, frontend tests + build)
+   ↓
+CI passes ✅   (if CI fails, nothing is deployed)
+   ↓
+CD job starts
+   ↓
+GitHub Actions connects to the production server through SSH
+   ↓
+the server gets the latest code
+   ↓
+backend:
+  uv sync --frozen                                  install/update Python packages
+  uv run python manage.py migrate                   update the database tables
+  uv run python manage.py collectstatic --noinput   gather CSS/JS for the Django admin
+   ↓
+frontend:
+  npm ci                                            install/update packages
+  npm run build                                     build the React production files
+  copy frontend/dist to the Nginx web root
+   ↓
+restart Gunicorn (Django)
+restart the Celery worker (so it runs the new task co
+reload Nginx
+   ↓
+health check: is the site answering?
+   ↓
+deployment complete ✅, the new version is live
+```
+
+## API overview
+
+All addresses start with `/api/`. Send the access token as `Authorization: Bearer <token>`.
+
+I've added a CI/CD section to README.md, just after "Running the tests". It keeps your content and your step-by-step diagram style:
+
+- Definitions: your two lines at the top (CI checks the code is good, CD puts the checked code on the real server).
+- CI (marked as set up): your first diagram, with two corrections so it matches what really happens. GitHub starts two machines at the same time, one for the backend and one for the frontend, instead of doing everything in order on one machine. The database starts before the tests, together with the backend machine. I also added one sentence saying that a failed CI run doesn't undo your push, which answers your earlier question.
+- CD (marked as not set up yet): your second and third diagram described the same process. I added a short note after eachcommand, such as "update the database tables", plus one line saying that if CI fails, nothing gets deployed.
+
+The README is honest about CD because there's no server yet. It becomes real when we do the "Deploy it" feature, number 8 in your ideas list.
+
+To publish it:
+
+cd C:\Users\subin\OneDrive\Desktop\django-ecommerce
+git add README.md
+git commit -m "README: explain CI (set up) and CD (planned)"
+git push
+
+✻ Sautéed for 29s · done 2:15 PM
+
+> is ci and cd both written inside ci.yml?
+
+No, ci.yml only has CI: the two check jobs (backend and frontend). There's no CD in the project yet, because there's no server to deploy to.
+
+When we add CD, there are two common ways to do it:
+
+- In the same file: add a third job called deploy to ci.yml, with a rule that it only starts after both check jobs pass, and only on a push to main, not on pull requests. This is the simplest option, and the "don't deploy broken code" rule sits right next to the checks.
+- In a separate file: create .github/workflows/deploy.yml and set it to start when the CI run finishes successfully. This is tidier when deployment gets
+  big, for example with extra approval steps or separate test
+
+Both work the same way, because GitHub reads every .yml file in .github/workflows/. For a project this size, the extra job in ci.yml is the usual choice,
+and that's what I'd suggest when we get there.
+
+✻ Baked for 6s · done 2:17 PM
+
+> so how does one deploy.yml starts after ci.yml where is that downstream logic written in one sentence
+
+It's written at the top of deploy.yml itself: on: workflow_run: workflows: ["CI"], types: [completed] makes it start whenever the workflow named "CI" finishes, and a line on the deploy job, if: github.event.workflow_run.conclusion == 'success', stops it from deploying when CI failed. ci.yml never mentions deploy.yml.
+
+✻ Worked for 4s · done 2:18 PM
+
+> so how the .githun folder knows the order first ci.yml and seconf deploy.ynml?
+
+The .github folder doesn't know any order, and file names don'em a.yml and z.yml and nothing would change. The order comesfrom what each file says it's waiting for:
+
+1. You push. GitHub reads every file in .github/workflows/ and asks each one: "do you start on a push?"
+2. ci.yml says on: push, so it starts.
+3. deploy.yml says on: workflow_run (wait for "CI" to finish), so it ignores the push.
+4. When CI finishes, GitHub announces "CI completed". deploy.yat, so it starts now and checks whether CI succeeded beforedeploying.
+
+So nothing runs them in order. deploy.yml simply can't start until CI has finished, and that's what makes it second.
+
+✻ Worked for 6s · done 2:18 PM
+
+※ recap: You're learning Django and React by building the ShopLite store, and CI is set up and passing on GitHub. Next, commit and push the updated README with its new CI/CD section.
+
+> CD: not set up yet (planned)
+
+  This is how deployment will work once the app has a real server (Gunicorn + Nginx on a cloud machine):
+
+  git push to main
+     ↓
+  CI runs (backend tests, frontend tests + build)
+     ↓
+  CI passes ✅   (if CI fails, nothing is deployed)
+     ↓
+  CD job starts
+     ↓
+  GitHub Actions connects to the production server through SSH
+     ↓
+  the server gets the latest code
+     ↓
+  backend:
+    uv sync --frozen                                  install/update Python packages
+    uv run python manage.py migrate                   update the database tables
+    uv run python manage.py collectstatic --noinput   gather CSS/JS for the Django admin
+     ↓
+  frontend:
+    npm ci                                            install/update packages
+    npm run build                                     build the React production files
+    copy frontend/dist to the Nginx web root
+     ↓
+  restart Gunicorn (Django)
+  restart the Celery worker (so it runs the new task code)
+  reload Nginx
+     ↓
+  health check: is the site answering?
+     ↓
+  deployment complete ✅, the new version is live
+  in this block say where is the production credentials tored inside github env or inside the server but keep the flow chart as is it is very goof
+
+I'll add the explanation right after the flowchart and leave the chart exactly as it is.
+
+● Update(~\OneDrive\Desktop\django-ecommerce\README.md)
+Added 13 lines
+deployment complete ✅, the new version is live
+```
+
+#### Where the production credentials are stored
+
+They are split between two places, and neither of them is the code in this repository:
+
+| Where | What is stored there | Why there |
+|---|---|---|
+| **GitHub Secrets** (repo → Settings → Secrets and variables → Actions) | only what GitHub needs to *reach* the server: the SSH private k
+ey, the server address, the SSH user name | the CD job needs them to connect. GitHub keeps them encrypted, hides them in logs, and nobody
+can read them back after saving (not even you) |
+| **On the server**, in `backend/.env` (created once  app's user) | the app's own secrets: `DJANGO_SECRET_KEY
+`, the database password, `EMAIL_HOST_PASSWORD`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_DEBUG=False`, … | Django reads them when it starts on the
+ server. They never pass through GitHub, so a leaked GitHub account or workflow log can't expose them |
+
+So GitHub only holds the *key to the server's door*. f stay inside the server,
+and deployments never touch that `.env` file: `git pull` leaves it alone because `.env` is git-ignored.
+`VITE_API_URL` is not a secret (every visitor's browser can see it), so it can simply sit in `frontend/.env` on the server.
+
+## API overview
+
+All addresses start with `/api/`. Send the access token as `Authorization: Bearer <token>`.
+
+I've added a "Where the production credentials are stored" section right after the CD flowchart in README.md, and the chart is unchanged.
+
+The short answer is both, each holding a different kind of secret:
+
+- GitHub Secrets hold only what's needed to reach the server: the SSH key, the server address and the user name. The CD job uses them to log in. GitHub encrypts them, hides them in logs, and won't show them back to anyone after they're saved.
+- The server holds the shop's own secrets in its backend/.env the database password, the email password and similar. Youcreate that file once, by hand, and it never passes through GitHub. Because .env is ignored by git, deployments never overwrite it.
+
+So if your GitHub account or a workflow log ever leaked, the attacker still wouldn't get your database or email passwords.
+
+To publish it:
