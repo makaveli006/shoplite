@@ -20,6 +20,7 @@
         { "name": "FRONTEND_URL", "value": "https://<CLOUDFRONT_DOMAIN>" },
         { "name": "DJANGO_SECURE_PROXY_SSL_HEADER", "value": "HTTP_CLOUDFRONT_FORWARDED_PROTO" },
         { "name": "DJANGO_LOG_LEVEL", "value": "INFO" },
+        { "name": "DJANGO_ADMIN_URL", "value": "django-admin/" },
         { "name": "DB_NAME", "value": "shoplite" },
         { "name": "DB_USER", "value": "shoplite" },
         { "name": "DB_HOST", "value": "<DB_HOST>" },

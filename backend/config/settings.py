@@ -143,6 +143,11 @@ DATABASES = {
 # Must be set BEFORE the first `migrate`.
 AUTH_USER_MODEL = 'accounts.User'
 
+# Where the Django admin lives. Locally "admin/" (http://127.0.0.1:8000/admin/). On AWS the React
+# shop and Django share one address, and React has its own /admin pages, so there it's
+# "django-admin/". Must end with a slash.
+DJANGO_ADMIN_URL = os.getenv('DJANGO_ADMIN_URL', 'admin/')
+
 # Where the browsable API's "Log in" page (/api-auth/login/) goes after signing in, when
 # it doesn't know the page you came from. Django's default, /accounts/profile/, doesn't exist here.
 LOGIN_REDIRECT_URL = '/api/'

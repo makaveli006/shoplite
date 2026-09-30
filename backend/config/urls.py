@@ -25,7 +25,9 @@ admin.site.site_title = 'ShopLite admin'
 admin.site.index_title = 'Store management'
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    # "admin/" locally. On AWS it's "django-admin/", because the React shop behind the same
+    # CloudFront address has its own /admin pages (the staff area).
+    path(settings.DJANGO_ADMIN_URL, admin.site.urls),
     path('api/auth/', include('accounts.urls')),
     path('api/', include('cart.urls')),
     path('api/', include('wishlist.urls')),
