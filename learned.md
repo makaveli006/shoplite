@@ -10606,3 +10606,635 @@ Checkpoint
 - AWS → ECR → shoplite/web and shoplite/worker: each has 1 image, tagged with the commit (a 40-character code), and once scanning finishes, a Vulnerabilities summary.
 
 If a step fails, paste its error message here. The usual causes are a variable name typo, or the trust policy's repo:makaveli006/shoplite:environment:production not matching exactly. Step 9 is the big one, ECS: the NAT gateway (routing), the cluster, task definitions, the load balancer and the two services. That's where the hourly costs start adding up, so do it on a day you can
+
+
+
+
+  Ran 1 shell command
+
+Everything for step 9 is ready. You'll copy from these files (all git-ignored, with your real values filled in):
+- Task definitions: deploy/aws/task-definitions/web.local.json, worker.local.json and migrate.local.json, filled with your account, the image label 84ad14aa…, the database and queue addresses, and the media bucket.
+- Load balancer secret: deploy/aws/origin-verify-secret.local.txt, a random 40-character value. The load balancer and CloudFront (step 10) both use it; it never goes into git or this chat.
+
+Step 9: ECS (the containers, the load balancer and the route to the internet)
+
+This step starts the main costs: about ₹12 per hour more, so about ₹15 per hour for everything including the database and queue (≈ ₹370 a day). Only start it when you can carry on through steps 10–11, testing and teardown the same day. It's past midnight where you are, so tomorrow may be better. The database and queue keep costing about ₹3 an hour meanwhile; if the next session is days away, it may be cheaper to delete them and recreate them later (about 20 minutes).
+
+What you're creating and why
+
+- NAT Gateway, plus a route in both private route tables: the private subnets have no way to the internet. The containers need one outwards only, to download their images from ECR, send emails and call Razorpay. A NAT gateway in a public subnet lets private resources start connections out, while nobody outside can connect in. That's the key difference from an Internet Gateway, and a classic interview question.
+- CloudWatch log groups: where each container's output goes (Gunicorn's access log, Celery's log, errors). Retention: 1 day, so logs delete themselves.
+- ECS cluster: a named group for your services. With Fargate there are no servers to manage: you say "run this container with 0.5 CPU and 1 GB", and AWS finds the machine, patches it, and bills per second.
+- Task definitions (3): the recipe for a container: which image, how much CPU and memory, environment variables, secrets from Parameter Store, which roles, and where logs go.
+  - shoplite-web: Django and Gunicorn.
+  - shoplite-worker: Celery.
+  - shoplite-migrate: runs python manage.py migrate once and stops; the deploy pipeline starts it before each release.
+- Target group: the list of web containers that should receive traffic. ECS registers each new container's private IP automatically. The load balancer checks /healthz/ every 15 seconds and only sends traffic to healthy containers.
+- Application Load Balancer (ALB): the public front door in the public subnets. It spreads requests over the web containers and removes unhealthy ones. Two protections:
+  - its security group only accepts CloudFront's addresses (step 3), and
+  - a listener rule forwards only requests carrying the secret header X-Origin-Verify; everything else gets 403.
+
+  CloudFront will add that header in step 10. This matters because the CloudFront address list is shared by all AWS customers: without the secret, someone else's CloudFront distribution could still reach your load balancer. This two-layer protection ("defence in depth") makes a good interview answer.
+- ECS services (2): keep the right number of containers running (1 web, 1 worker) and replace any that crash.
+  - Rolling updates: new containers start before old ones stop, so there's no downtime.
+  - Circuit breaker: if a new version can't become healthy, ECS rolls back by itself.
+
+Clicks (region: US East (N. Virginia))
+
+A. NAT Gateway and routes
+1. VPC → NAT gateways → Create NAT gateway.
+   - Name: shoplite-nat
+   - Availability mode: Zonal (if the page asks; Regional costs more)
+   - Subnet: the public subnet in us-east-1a (shoplite-subnet-public1-us-east-1a, 10.0.0.0/20)
+   - Connectivity type: Public
+   - Elastic IP allocation ID: Allocate Elastic IP
+   - Tags: Project = shoplite-demo, Owner = subin
+   - Create NAT gateway. It shows Pending, then Available after about 2 minutes.
+2. VPC → Route tables → select shoplite-rtb-private1-us-east-1a → Routes tab → Edit routes → Add route: Destination 0.0.0.0/0 → Target NAT Gateway → shoplite-nat → Save changes.
+3. Do the same for shoplite-rtb-private2-us-east-1b.
+   - With one NAT for both AZs, traffic from 1b crosses to 1a; production would have one NAT per AZ.
+
+B. Log groups (CloudWatch → Logs → Log groups → Create log group, 3 times)
+
+┌───────────────────────┬───────────┐
+│    Log group name     │ Retention │
+├───────────────────────┼───────────┤
+│ /ecs/shoplite-web     │ 1 day     │
+├───────────────────────┼───────────┤
+│ /ecs/shoplite-worker  │ 1 day     │
+├───────────────────────┼───────────┤
+│ /ecs/shoplite-migrate │ 1 day     │
+└───────────────────────┴───────────┘
+
+Add the tags Project / Owner to each.
+
+C. Cluster
+1. Elastic Container Service → Clusters → Create cluster.
+   - Cluster name: shoplite-cluster
+   - Infrastructure: AWS Fargate (serverless) only
+   - Monitoring: leave Container Insights off (it costs money)
+2. Tags as before → Create.
+
+D. Three task definitions
+1. ECS → Task definitions → Create new task definition → Create new task definition with JSON.
+2. Select everything in the editor and delete it. Paste deploy/aws/task-definitions/web.local.json → Create.
+3. Repeat with worker.local.json and migrate.local.json.
+4. Add the tags afterwards: open each task definition → Tags tab. They're not in the JSON.
+
+E. Target group
+1. EC2 → Target groups → Create target group.
+   - Target type: IP addresses (Fargate containers are addressed by IP)
+   - Name: shoplite-web-tg
+   - Protocol : Port: HTTP : 8000
+   - IP address type: IPv4 · VPC: shoplite-vpc · Protocol version: HTTP1
+   - Health check path: /healthz/
+   - Advanced health check settings: Healthy threshold 2 · Unhealthy threshold 3 · Timeout 5 · Interval 15 · Success codes 200
+   - Tags as before → Next
+2. Register targets: add nothing (ECS does it) → Create target group.
+3. Open it → Attributes → Edit → Deregistration delay: 30 seconds → Save. Deploys are faster: old containers are released after 30 seconds instead of 300.
+
+F. Load balancer and its rules
+1. EC2 → Load balancers → Create load balancer → Application Load Balancer → Create.
+   - Name: shoplite-alb · Scheme: Internet-facing · IP address type: IPv4
+   - VPC: shoplite-vpc
+   - Mappings: tick us-east-1a → its public subnet, and us-east-1b → its public subnet. Check both say public.
+   - Security groups: remove default, choose shoplite-alb-sg
+   - Listeners and routing: HTTP : 80 → Default action: Forward to shoplite-web-tg. We change this in step 3 below.
+   - Leave WAF, Global Accelerator and any other add-ons unticked (they cost money).
+   - Tags as before → Create load balancer. It takes about 3 minutes to become Active.
+2. Open shoplite-alb → Listeners and rules → HTTP:80 → Add rule.
+   - Name: from-cloudfront-only
+   - Conditions → Add condition → HTTP header: Header name X-Origin-Verify · Value: the 40 characters from deploy/aws/origin-verify-secret.local.txt
+   - Action: Forward to target groups → shoplite-web-tg
+   - Priority: 1 → Create.
+3. Back on the listener → Default rule → Edit (or Actions → Edit listener).
+   - Default action: Return fixed response
+   - Response code: 403 · Content type: text/plain · Response body: Forbidden
+   - Save. Now only requests with the secret header reach Django.
+
+G. Two services (ECS → Clusters → shoplite-cluster → Services → Create)
+
+Web service
+1. Compute options: Launch type → FARGATE, platform version LATEST.
+2. Application type: Service · Task definition family: shoplite-web, latest revision · Service name: shoplite-web · Desired tasks: 1.
+3. Deployment options:
+   - Rolling update · Min running tasks 100 % · Max running tasks 200 %
+   - tick Use the Amazon ECS deployment circuit breaker and Rollback on failure
+4. Networking:
+   - VPC: shoplite-vpc · Subnets: keep only the 2 private subnets
+   - Security group: Use an existing security group → only shoplite-web-sg
+   - Public IP: off
+5. Load balancing: tick it.
+   - Application Load Balancer → Use an existing load balancer → shoplite-alb
+   - Container: web 8000:8000
+   - Listener: Use an existing listener 80:HTTP
+   - Target group: Use an existing target group shoplite-web-tg
+   - Health check grace period: 60 seconds
+6. Service auto scaling: off. Tags as before, and set Propagate tags from: Service → Create.
+
+Worker service: the same, except:
+- Task definition family: shoplite-worker · Service name: shoplite-worker
+- Security group: only shoplite-worker-sg
+- No load balancing, and no circuit breaker grace period needed (leave the defaults)
+
+H. The last two GitHub variables (Settings → Environments → production → Environment variables)
+
+┌────────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│          Name          │                                                            Value                                                            │
+├────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ PRIVATE_SUBNETS        │ the two private subnet IDs, comma-separated without spaces, like subnet-0abc…,subnet-0def… (VPC → Subnets → filter shoplite │
+│                        │  → the ones with 10.0.128.0/20 and 10.0.144.0/20)                                                                           │
+├────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ MIGRATE_SECURITY_GROUP │ the ID of shoplite-web-sg, like sg-0123… (the migration task needs to reach the database)                                   │
+└────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+Cost
+
+┌─────────────────────────────────────────────────┬──────────────────────────────────────────────────────────────┬────────────────────────────────────┐
+│                     Created                     │                             Cost                             │        Charges when unused?        │
+├─────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+│ Log groups, cluster, task definitions, target   │ $0 (₹0)                                                      │ no                                 │
+│ group, services, routes                         │                                                              │                                    │
+├─────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+│ NAT Gateway                                     │ $0.045/h (₹4.32/h) + $0.045 per GB through it (the first     │ yes, every hour until deleted; it  │
+│                                                 │ image pull is ~0.3 GB ≈ ₹1.30 once)                          │ can't be stopped                   │
+├─────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+│ NAT's Elastic IP (public IPv4)                  │ $0.005/h (₹0.48/h)                                           │ yes, until released, even after    │
+│                                                 │                                                              │ the NAT is deleted                 │
+├─────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+│ Application Load Balancer                       │ $0.0225/h (₹2.16/h) + usage (LCU) ≈ $0.008/h (₹0.77/h)       │ yes, every hour; it can't be       │
+│                                                 │                                                              │ stopped                            │
+├─────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+│ ALB's 2 public IPv4 addresses                   │ $0.010/h (₹0.96/h)                                           │ yes, while the ALB exists          │
+├─────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+│ Fargate web (0.5 vCPU, 1 GB)                    │ $0.0247/h (₹2.37/h)                                          │ no when the service is set to 0    │
+│                                                 │                                                              │ tasks                              │
+├─────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+│ Fargate worker (0.25 vCPU, 0.5 GB)              │ $0.0123/h (₹1.18/h)                                          │ no when set to 0 tasks             │
+├─────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+│ Migrate task                                    │ a few seconds per run ≈ ₹0                                   │ only while it runs                 │
+├─────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+│ CloudWatch Logs                                 │ $0.50 per GB written (we write a few MB) ≈ ₹0                │ stored logs expire after 1 day     │
+├─────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+│ Step total                                      │ ≈ $0.127/h ≈ ₹12.2/h                                         │                                    │
+├─────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼────────────────────────────────────┤
+│ Everything so far (with the database and queue) │ ≈ $0.159/h ≈ ₹15.3/h (≈ ₹367 a day)                          │                                    │
+└─────────────────────────────────────────────────┴──────────────────────────────────────────────────────────────┴────────────────────────────────────┘
+
+Deleting it later (step 8 of the plan)
+
+- How (in this order):
+  a. ECS → shoplite-cluster → Services: open each service → Update → Desired tasks 0, then Delete service (tick Force delete).
+  b. Delete cluster.
+  c. ECS → Task definitions: for each family, select all revisions → Actions → Deregister, then Delete.
+  d. EC2 → Load balancers → shoplite-alb → Actions → Delete, then Target groups → shoplite-web-tg → Delete.
+  e. VPC → NAT gateways → shoplite-nat → Actions → Delete NAT gateway, wait until Deleted, then VPC → Elastic IPs → select its address → Actions → Release Elastic IP address.
+  f. CloudWatch → Log groups: delete the 3 /ecs/shoplite-* groups.
+- What it affects: the shop goes offline (intended). Deleting the NAT leaves the private route tables with a dead route ("blackhole"), which disappears with the VPC. The load balancer must be gone before its security group and subnets can be deleted. The most forgotten item is the Elastic IP: it keeps charging after the NAT is gone until you release it.
+
+Checkpoint
+
+- ECS → shoplite-cluster → Services: both show 1/1 tasks running, and the deployment is Completed.
+- EC2 → Target groups → shoplite-web-tg → Targets: 1 target, healthy.
+- CloudWatch → /ecs/shoplite-web: a log stream shows Listening at: http://0.0.0.0:8000 and health checks like "GET /healthz/ HTTP/1.1" 200.
+- CloudWatch → /ecs/shoplite-worker: shows celery@… ready.
+- You can't open the shop in a browser yet. The load balancer only accepts CloudFront, which comes in step 10. That's expected.
+
+If a task stops: open ECS → the service → Tasks → Stopped and click the task. The Stopped reason tells you what went wrong. The usual ones:
+- CannotPullContainerError: the NAT route is missing.
+- ResourceInitializationError … ssm: a parameter name doesn't match, or the execution role's policy is wrong.
+- An error in the log group: the app itself failed to start. Paste the stopped reason or the log lines here.
+
+Tell me when both services are running and the target is healthy. Step 10 is CloudFront: the HTTPS address, the React app and the secret header.
+
+✻ Cooked for 3m 15s · done 1:48 AM
+                                                                                                                    √ Update installed · Restart to up
+
+
+
+
+
+
+
+
+
+                                                                                                                    service, then confirm both services show 1/1 running and the web target is healthy.
+
+> whats next
+
+First, a quick check of what I can see from here: whether the two GitHub variables from step 9 part H are set.
+
+  Ran 1 shell command
+
+GitHub is missing 3 variables. I can fill in their values from what you pasted earlier (these IDs aren't secret). Add them in Settings → Environments → production → Environment variables:
+
+┌────────────────────────┬───────────────────────────────────────────────────┐
+│          Name          │                       Value                       │
+├────────────────────────┼───────────────────────────────────────────────────┤
+│ VITE_CURRENCY          │ INR (from step 8, still missing)                  │
+├────────────────────────┼───────────────────────────────────────────────────┤
+│ PRIVATE_SUBNETS        │ subnet-0443db101489b9e25,subnet-03a9ba72b14ca9875 │
+├────────────────────────┼───────────────────────────────────────────────────┤
+│ MIGRATE_SECURITY_GROUP │ sg-0e62944bf1aa37e89                              │
+└────────────────────────┴───────────────────────────────────────────────────┘
+
+Also confirm the step 9 checkpoint before going on:
+- ECS → shoplite-cluster: both services show 1/1 running.
+- Target group shoplite-web-tg: 1 target, healthy.
+- Listener HTTP:80: exactly 2 rules (the header rule and the default 403).
+
+Then:
+
+Step 10: CloudFront (the HTTPS address in front of everything)
+
+Nearly free. CloudFront's always-free allowance is 1 TB of traffic, 10 million requests and 2 million function runs per month; we'll use a tiny fraction.
+
+What you're creating and why
+
+- CloudFront: Amazon's CDN (content delivery network), 600+ "edge" servers around the world, including in Mumbai, Chennai, Delhi and other Indian cities. Visitors connect to the nearest one. It keeps copies of files that don't change (JavaScript, CSS, pictures) close to them, and forwards everything else to your load balancer.
+- HTTPS for free: each distribution gets an address like https://d1abc2xyz.cloudfront.net with AWS's certificate. You don't need to buy a domain or manage certificates.
+  - Limitation (honest interview point): with this free address, CloudFront also allows older TLS versions, and the "TLS 1.2 minimum" setting only becomes available with your own domain and an ACM certificate.
+- One address, three origins. An origin is where CloudFront fetches content from:
+  - Frontend bucket (S3): the React app
+  - Media bucket (S3): product pictures
+  - Load balancer: Django (the API, admin, the admin's static files)
+
+  Because the browser only ever talks to one address, there's no CORS and cookies and logins just work.
+- Behaviours: rules that say which address paths go to which origin, and whether to cache them.
+  - /api/*, /admin/*, /api-auth/* → load balancer, never cached. These answers are personal (your cart, your orders). All visitor headers are forwarded, including the original host name and CloudFront-Forwarded-Proto, which tells Django the visitor used HTTPS.
+  - /static/* → load balancer, cached. Admin CSS and JS change only with a new release.
+  - /media/* → media bucket, cached.
+  - Everything else → frontend bucket, cached, with the small CloudFront Function from deploy/aws/cloudfront-spa-routing.js that turns page addresses like /products/chef-knife into /index.html.
+- Origin Access Control (OAC): CloudFront's own signed identity for reading your private buckets. Each bucket's policy then says "only this one CloudFront distribution may read me". The buckets stay 100% private, and CloudFront is the only way in.
+- The secret header: CloudFront adds X-Origin-Verify: <your 40 characters> to every request it sends to the load balancer. That's the second lock from step 9.
+- Change to the plan: API requests forward all visitor headers, including Host. Django then sees the real address (d….cloudfront.net) instead of the load balancer's internal name, which keeps ALLOWED_HOSTS and the CSRF checks simple.
+
+Clicks
+
+A. The CloudFront Function (it must exist before the distribution uses it)
+1. Search CloudFront → left menu Functions → Create function.
+2. Name: shoplite-spa-routing · Description: Send React page addresses to index.html · Runtime: cloudfront-js-2.0 → Create function.
+3. Build tab: select everything in the code box, delete it, and paste the contents of deploy/aws/cloudfront-spa-routing.js → Save changes.
+4. Publish tab → Publish function.
+
+B. The distribution, with the frontend bucket as the first origin
+1. CloudFront → Distributions → Create distribution.
+   - Pricing plan: if the page asks, choose Free ($0/month) or Pay as you go. Either is $0 at our usage.
+   - If the wizard asks for a name, use shoplite. If it asks for a type, choose Single website or app.
+2. Origin:
+   - Origin type: Amazon S3 → S3 origin: shoplite-demo-frontend-subin.s3.us-east-1.amazonaws.com.
+   - Origin access: Origin access control settings (recommended) / Allow private S3 bucket access to CloudFront → create a new OAC (default name and settings: Sign requests).
+   - If it offers Update bucket policy automatically, accept it. Otherwise note the policy it shows; we'll paste it in part E.
+3. Default cache behaviour:
+   - Viewer protocol policy: Redirect HTTP to HTTPS
+   - Allowed HTTP methods: GET, HEAD
+   - Cache policy: CachingOptimized
+   - Function associations → Viewer request: CloudFront Functions → shoplite-spa-routing
+4. Web Application Firewall (WAF): Do not enable security protections (WAF has monthly costs).
+5. Settings:
+   - Price class: Use North America, Europe, Asia, Middle East, and Africa (includes India)
+   - Default root object: index.html
+   - Supported HTTP versions: HTTP/2 and HTTP/3 ticked · IPv6: on
+   - Standard logging: off
+   - Description: ShopLite demo
+   - Tags: Project = shoplite-demo, Owner = subin
+6. Create distribution. Note the Distribution domain name (d….cloudfront.net) and the ID (like E1ABC2DEF3GH).
+
+C. Add the other two origins (distribution → Origins tab → Create origin)
+1. Media bucket:
+   - Origin domain: shoplite-demo-media-subin.s3.us-east-1.amazonaws.com
+   - Origin access: Origin access control settings → choose the OAC from part B (or create one)
+   - Name: media-s3 → Create origin
+   - Copy the bucket policy it shows; you need it in part E.
+2. Load balancer:
+   - Origin domain: choose shoplite-alb-1105023111.us-east-1.elb.amazonaws.com from the list
+   - Protocol: HTTP only, port 80
+   - Add custom header: Header name X-Origin-Verify · Value: the 40 characters from deploy/aws/origin-verify-secret.local.txt
+   - Name: alb → Create origin
+
+D. The behaviours (distribution → Behaviors tab → Create behavior, 5 times)
+
+┌─────────────┬──────────┬──────────────────────┬─────────────────────────────────────────┬──────────────────┬───────────────────────────────────────┐
+│    Path     │  Origin  │   Viewer protocol    │             Allowed methods             │   Cache policy   │         Origin request policy         │
+│   pattern   │          │                      │                                         │                  │                                       │
+├─────────────┼──────────┼──────────────────────┼─────────────────────────────────────────┼──────────────────┼───────────────────────────────────────┤
+│ /api/*      │ alb      │ Redirect HTTP to     │ GET, HEAD, OPTIONS, PUT, POST, PATCH,   │ CachingDisabled  │ AllViewerAndCloudFrontHeaders-2022-06 │
+│             │          │ HTTPS                │ DELETE                                  │                  │                                       │
+├─────────────┼──────────┼──────────────────────┼─────────────────────────────────────────┼──────────────────┼───────────────────────────────────────┤
+│ /admin/*    │ alb      │ Redirect HTTP to     │ GET, HEAD, OPTIONS, PUT, POST, PATCH,   │ CachingDisabled  │ AllViewerAndCloudFrontHeaders-2022-06 │
+│             │          │ HTTPS                │ DELETE                                  │                  │                                       │
+├─────────────┼──────────┼──────────────────────┼─────────────────────────────────────────┼──────────────────┼───────────────────────────────────────┤
+│ /api-auth/* │ alb      │ Redirect HTTP to     │ GET, HEAD, OPTIONS, PUT, POST, PATCH,   │ CachingDisabled  │ AllViewerAndCloudFrontHeaders-2022-06 │
+│             │          │ HTTPS                │ DELETE                                  │                  │                                       │
+├─────────────┼──────────┼──────────────────────┼─────────────────────────────────────────┼──────────────────┼───────────────────────────────────────┤
+│ /static/*   │ alb      │ Redirect HTTP to     │ GET, HEAD                               │ CachingOptimized │ AllViewerAndCloudFrontHeaders-2022-06 │
+│             │          │ HTTPS                │                                         │                  │                                       │
+├─────────────┼──────────┼──────────────────────┼─────────────────────────────────────────┼──────────────────┼───────────────────────────────────────┤
+│ /media/*    │ media-s3 │ Redirect HTTP to     │ GET, HEAD                               │ CachingOptimized │ (none)                                │
+│             │          │ HTTPS                │                                         │                  │                                       │
+└─────────────┴──────────┴──────────────────────┴─────────────────────────────────────────┴──────────────────┴───────────────────────────────────────┘
+
+- Why /static/* forwards headers too: Django needs the real host name and the HTTPS header even for these files, otherwise it answers with a redirect or an error. Caching still works, because the cache policy decides what's stored.
+- Order: the order among these 5 doesn't matter (their paths don't overlap). The Default (*) behaviour is always checked last.
+
+E. Let CloudFront read the media bucket
+1. S3 → shoplite-demo-media-subin → Permissions → Bucket policy → Edit. Paste the policy CloudFront showed in part C.1 → Save.
+2. It allows cloudfront.amazonaws.com to s3:GetObject only when AWS:SourceArn is your distribution.
+3. Do the same for shoplite-demo-frontend-subin if part B didn't update its policy automatically.
+4. Block all public access stays On. This policy isn't "public": it names one AWS service and one distribution.
+
+F. The last GitHub variable (Settings → Environments → production)
+- CLOUDFRONT_DISTRIBUTION_ID = your distribution ID (like E1ABC2DEF3GH).
+- Tell me the ID and the domain name, and I'll add the "refresh CloudFront" permission to the deploy role's policy file for you to paste.
+
+Cost
+
+┌───────────────────────────────────────────────┬──────────────────────────────────────────────────────────┬──────────────────────────────────────────┐
+│                    Created                    │                           Cost                           │           Charges when unused?           │
+├───────────────────────────────────────────────┼──────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ CloudFront distribution                       │ $0 (₹0), within the always-free 1 TB and 10 M requests   │ no; only for traffic beyond the free     │
+│                                               │ per month                                                │ allowance                                │
+├───────────────────────────────────────────────┼──────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ CloudFront Function                           │ $0 (₹0), 2 M runs per month free                         │ no                                       │
+├───────────────────────────────────────────────┼──────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ Origin Access Control, bucket policies        │ $0 (₹0)                                                  │ no                                       │
+├───────────────────────────────────────────────┼──────────────────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ Traffic from the load balancer and S3 to      │ $0 (₹0) (AWS doesn't charge origin → CloudFront          │ no                                       │
+│ CloudFront                                    │ transfer)                                                │                                          │
+└───────────────────────────────────────────────┴──────────────────────────────────────────────────────────┴──────────────────────────────────────────┘
+
+Deleting it later (step 8 of the plan)
+
+- How:
+  a. CloudFront → Distributions → select shoplite → Disable, then wait until Last modified shows a date instead of Deploying (5–15 minutes) → Delete.
+  b. Then Functions → shoplite-spa-routing → Delete (it can only go after no distribution uses it), and Origin access → the OAC(s) → Delete.
+- What it affects: the shop's address stops working. The buckets' policies still name the deleted distribution, which is harmless, and they go when the buckets are deleted.
+
+Checkpoint
+
+After Status: Enabled and Last modified shows a date (about 5–10 minutes):
+- https://<your-domain>.cloudfront.net/api/products/ in a browser shows JSON with your products, served by Django through CloudFront → load balancer → container. (Empty "results": [] is also fine, because the database has no products until step 11.)
+  - 400 Bad Request is expected at this point: Django doesn't know the CloudFront name yet (DJANGO_ALLOWED_HOSTS is still localhost). We fix that first in step 11.
+  - A 403 Forbidden in plain text means the secret header in part C.2 doesn't match the load balancer rule.
+- https://<your-domain>.cloudfront.net/ shows AccessDenied or NoSuchKey from S3, because the React app isn't uploaded yet. That's also fine; the next deploy uploads it.
+
+Tell me the distribution domain name and ID when it's deployed, plus what /api/products/ shows. Step 11 is finishing the configuration: the domain settings, migrations, sample products, the admin user, and the first full deploy.
+
+✻ Cogitated for 1m 17s · done 2:53 AM
+
+
+
+
+I'll check that the 3 GitHub variables are now there:
+
+  Ran 1 shell command
+
+The resume worked. One thing is still open: the 3 GitHub variables aren't set yet. Please add them now; the deploy needs them in step 11. Go to Settings → Environments → production → Environment variables → Add environment variable:
+
+┌────────────────────────┬───────────────────────────────────────────────────┐
+│          Name          │                       Value                       │
+├────────────────────────┼───────────────────────────────────────────────────┤
+│ VITE_CURRENCY          │ INR                                               │
+├────────────────────────┼───────────────────────────────────────────────────┤
+│ PRIVATE_SUBNETS        │ subnet-0443db101489b9e25,subnet-03a9ba72b14ca9875 │
+├────────────────────────┼───────────────────────────────────────────────────┤
+│ MIGRATE_SECURITY_GROUP │ sg-0e62944bf1aa37e89                              │
+└────────────────────────┴───────────────────────────────────────────────────┘
+
+Then:
+
+Step 10: CloudFront (the HTTPS address)
+
+Cost: $0. It stays within CloudFront's always-free allowance.
+
+What you're creating and why
+
+- One HTTPS address (https://d….cloudfront.net) in front of everything, with AWS's certificate, so there's no domain to buy.
+- Three sources ("origins") behind it: the frontend bucket (the React app), the media bucket (pictures), and the load balancer (Django).
+- Path rules ("behaviours") decide which source answers: /api/*, /admin/*, /api-auth/* and /static/* go to Django, /media/* to the pictures, and everything else to the React app.
+- The buckets stay private. Only this CloudFront distribution may read them (Origin Access Control).
+- CloudFront adds the secret header on its way to the load balancer, so the load balancer accepts it.
+
+Clicks
+
+A. The small function for React pages
+1. CloudFront → Functions → Create function → Name: shoplite-spa-routing · Runtime: cloudfront-js-2.0 → Create.
+2. Build tab: delete the example code, paste the contents of deploy/aws/cloudfront-spa-routing.js → Save changes.
+3. Publish tab → Publish function.
+
+B. Create the distribution (the React app as the first origin)
+1. CloudFront → Distributions → Create distribution. If it asks about a pricing plan, choose Free or Pay as you go.
+2. Origin: Amazon S3 → shoplite-demo-frontend-subin.s3.us-east-1.amazonaws.com → Origin access control (recommended) → create a new one with the defaults, and accept Update bucket policy if it's offered.
+3. Default behaviour:
+   - Viewer protocol: Redirect HTTP to HTTPS · Methods: GET, HEAD · Cache policy: CachingOptimized
+   - Function associations → Viewer request: CloudFront Functions → shoplite-spa-routing
+4. WAF: do not enable.
+5. Settings:
+   - Default root object: index.html · Price class: North America, Europe, Asia, Middle East, and Africa
+   - Tags: Project = shoplite-demo, Owner = subin
+6. Create distribution. Copy its domain name and ID.
+
+C. Add the other two origins (Origins tab → Create origin)
+1. Media bucket: shoplite-demo-media-subin.s3.us-east-1.amazonaws.com → Origin access control (pick the same one) → Name: media-s3 → Create. Copy the bucket policy it shows you.
+2. Load balancer:
+   - Origin domain: pick the new shoplite-alb-…elb.amazonaws.com
+   - Protocol: HTTP only, port 80
+   - Add custom header: X-Origin-Verify = the value in deploy/aws/origin-verify-secret.local.txt
+   - Name: alb → Create
+
+D. Five behaviours (Behaviors tab → Create behavior, one per row; all use Redirect HTTP to HTTPS)
+
+┌──────────────┬──────────┬──────────────────────────────────────────────┬──────────────────┬───────────────────────────────────────┐
+│ Path pattern │  Origin  │               Allowed methods                │   Cache policy   │         Origin request policy         │
+├──────────────┼──────────┼──────────────────────────────────────────────┼──────────────────┼───────────────────────────────────────┤
+│ /api/*       │ alb      │ GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE │ CachingDisabled  │ AllViewerAndCloudFrontHeaders-2022-06 │
+├──────────────┼──────────┼──────────────────────────────────────────────┼──────────────────┼───────────────────────────────────────┤
+│ /admin/*     │ alb      │ GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE │ CachingDisabled  │ AllViewerAndCloudFrontHeaders-2022-06 │
+├──────────────┼──────────┼──────────────────────────────────────────────┼──────────────────┼───────────────────────────────────────┤
+│ /api-auth/*  │ alb      │ GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE │ CachingDisabled  │ AllViewerAndCloudFrontHeaders-2022-06 │
+├──────────────┼──────────┼──────────────────────────────────────────────┼──────────────────┼───────────────────────────────────────┤
+│ /static/*    │ alb      │ GET, HEAD                                    │ CachingOptimized │ AllViewerAndCloudFrontHeaders-2022-06 │
+├──────────────┼──────────┼──────────────────────────────────────────────┼──────────────────┼───────────────────────────────────────┤
+│ /media/*     │ media-s3 │ GET, HEAD                                    │ CachingOptimized │ (none)                                │
+└──────────────┴──────────┴──────────────────────────────────────────────┴──────────────────┴───────────────────────────────────────┘
+
+E. Let CloudFront read the media bucket
+S3 → shoplite-demo-media-subin → Permissions → Bucket policy → Edit → paste the policy from C.1 → Save. Also check the frontend bucket has a similar policy; if B didn't add it, add it the same way. Block all public access stays On.
+
+Cost
+
+┌────────────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────┬──────────────────────┐
+│                            Created                             │                          Cost                           │ Charges when unused? │
+├────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────┼──────────────────────┤
+│ Distribution, function, origin access control, bucket policies │ $0 (₹0) (free allowance: 1 TB, 10 M requests per month) │ no                   │
+└────────────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────┴──────────────────────┘
+
+Deleting it later
+
+- How: CloudFront → select the distribution → Disable, wait about 10 minutes → Delete. Then delete the function and the origin access control.
+- What it affects: the shop's address stops working. Nothing else uses it.
+
+Checkpoint
+
+When Last modified shows a date (about 5–10 minutes), open https://<your-domain>.cloudfront.net/api/products/:
+- 400 Bad Request: expected and fine for now, because Django doesn't know the CloudFront name yet (step 11 fixes it).
+- 403 Forbidden (plain text): the secret header value doesn't match the load balancer's rule.
+- 502 / 504: the load balancer can't reach the container. Check that the target group shows healthy.
+
+Send me the domain name, the ID, and what /api/products/ shows.
+
+✻ Baked for 36s · done 10:37 AM
+
+
+
+
+✻ Cooked for 17s · done 10:45 AM
+
+> all done whats next
+
+Next is step 11, which makes the shop live. I need two values from you first; you can find both on CloudFront → Distributions (the list shows them):
+
+1. Distribution domain name: like d1abc2def3xyz.cloudfront.net
+2. Distribution ID: like E1ABC2DEF3GHIJ
+
+Also tell me what https://<your domain>/api/products/ shows in the browser right now:
+- 400 Bad Request: expected; it means CloudFront reaches Django.
+- 403 Forbidden: the secret header doesn't match.
+- 502 or 504: the load balancer can't reach the container.
+
+With the domain and ID, step 11 is:
+- I prepare:
+  - the deploy role's extra CloudFront permission (a ready-to-paste policy file)
+  - new task definition versions with your CloudFront address filled in (DJANGO_ALLOWED_HOSTS, DJANGO_CSRF_TRUSTED_ORIGINS, FRONTEND_URL, AWS_S3_CUSTOM_DOMAIN)
+- You do:
+  - paste those in the console
+  - add the GitHub variable CLOUDFRONT_DISTRIBUTION_ID
+  - remove DEPLOY_IMAGES_ONLY
+  - push once: the full deploy runs the migrations, updates the containers and uploads the React app
+  - then create the sample products and your admin user
+
+✻ Worked for 9s · done 10:55 AM
+
+> duw6s064srdbv.cloudfront.net and EK9VCUMPOM5DB whats next
+
+Now step 11. First I'll prepare the files with your CloudFront values: the deploy role's CloudFront permission, and the task definitions with the new address.
+
+● Update(deploy\aws\iam\github-deploy-permissions-policy.json)
+Added 6 lines
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::<FRONTEND_BUCKET>"
+    },
+    {
+      "Sid": "RefreshTheShopLiteDistributionOnly",
+      "Effect": "Allow",
+      "Action": ["cloudfront:CreateInvalidation"],
+      "Resource": "arn:aws:cloudfront::<ACCOUNT_ID>:distribution/<DISTRIBUTION_ID>"
+    }
+  ]
+}
+
+  Ran 1 shell command
+
+All files are ready and valid. I'll save the CloudFront details to my deployment notes:
+
+  Wrote 1 memory
+
+Step 11: Make the shop live (settings, first full deploy, products, admin)
+
+No new costs. It only updates things that already exist.
+
+What you're doing and why
+
+- Tell Django its public address. It only accepts requests for host names it knows (DJANGO_ALLOWED_HOSTS). Until now that was localhost, which is why /api/products/ gave 400. The new task definition versions add duw6s064srdbv.cloudfront.net there, plus:
+  - DJANGO_CSRF_TRUSTED_ORIGINS: the admin's login form trusts this address.
+  - FRONTEND_URL: email links point at the real shop.
+  - AWS_S3_CUSTOM_DOMAIN: product picture links go through CloudFront.
+- New "revisions": a task definition is never edited in place. You create revision 2, and revision 1 stays for rollbacks. That's how ECS keeps a history.
+- The deploy role gets one more permission: refreshing only this CloudFront distribution after uploading the React app.
+- The first full deploy runs the complete pipeline for the first time:
+  a. build the images
+  b. run the database migrations (the empty RDS database gets its tables)
+  c. roll out the containers with revision 2
+  d. build and upload the React app
+  e. refresh CloudFront
+- Sample data and an admin: two one-off tasks (seed_catalog, then createsuperuser) run inside the private network once and stop. That's how teams run management commands against a production database, instead of opening the database to the internet.
+
+Clicks
+
+A. The deploy role's extra permission
+1. IAM → Roles → shoplite-github-deploy → Permissions → click the inline policy shoplite-deploy → Edit → JSON.
+2. Delete everything in the editor, paste deploy/aws/iam/github-deploy-permissions-policy.local.json (it now ends with the RefreshTheShopLiteDistributionOnly block) → Next → Save changes.
+
+B. New task definition revisions (do this for web and worker)
+1. ECS → Task definitions → click shoplite-web → tick revision 1 → Create new revision → Create new revision with JSON.
+2. Delete everything, paste deploy/aws/task-definitions/web.local.json → Create. You now have shoplite-web:2.
+3. Same for shoplite-worker with worker.local.json, giving shoplite-worker:2.
+4. Don't update the services by hand; the deploy in part D does that.
+
+C. GitHub: two changes (both before you push)
+1. Settings → Environments → production → Add environment variable: CLOUDFRONT_DISTRIBUTION_ID = EK9VCUMPOM5DB.
+2. Settings → Secrets and variables → Actions → Variables tab → delete DEPLOY_IMAGES_ONLY. The next run is then the full deploy.
+
+D. The first full deploy
+1. In your PowerShell, at the project root:
+cd C:\Users\subin\OneDrive\Desktop\django-ecommerce
+git branch --show-current          # feature/aws-deploy
+git add .
+git status                         # no *.local.json or *.local.txt listed
+git commit -m "AWS: CloudFront settings in the task definition templates, CloudFront invalidation permission"
+git push
+2. GitHub → Actions → Deploy to AWS → Review deployments → production → Approve and deploy.
+3. It takes about 8–12 minutes. Watch for:
+   - Run the database migrations turning green: the tables now exist in RDS.
+   - Deploy the web service and Deploy the worker service: ECS starts the new containers, waits until they're healthy, then stops the old ones.
+   - Upload the React app to S3 and refresh CloudFront.
+
+E. Sample products and your admin user (after D is green; run the migrate task twice with a different command)
+1. ECS → Clusters → shoplite-cluster → Tasks tab → Run new task.
+2. Compute options: Launch type → FARGATE, LATEST.
+3. Application type: Task · Family: shoplite-migrate, latest revision · Desired tasks: 1.
+4. Networking:
+   - VPC: shoplite-vpc
+   - Subnets: the 2 private ones only
+   - Security group: only shoplite-web-sg
+   - Public IP: off
+5. Container overrides → migrate → Command override: python,manage.py,seed_catalog. The console expects the words separated by commas, without spaces.
+6. Create. After about 1 minute the task shows Stopped with exit code 0. Its log (CloudWatch → /ecs/shoplite-migrate) says the products were created.
+7. Repeat 1–6 with the command override python,manage.py,createsuperuser,--noinput.
+   - This creates the admin subin@ontash.net with the password you stored in /shoplite/DJANGO_SUPERUSER_PASSWORD (step 6).
+   - If you don't have that password to hand: Parameter Store → /shoplite/DJANGO_SUPERUSER_PASSWORD → Show decrypted value. Just don't paste it here.
+
+Cost
+
+┌─────────────────────────────────────────────────────────┬────────────────────────────────────────────────┬──────────────────────┐
+│                          Done                           │                      Cost                      │ Charges when unused? │
+├─────────────────────────────────────────────────────────┼────────────────────────────────────────────────┼──────────────────────┤
+│ New revisions, policy change, GitHub variable           │ $0 (₹0)                                        │ no                   │
+├─────────────────────────────────────────────────────────┼────────────────────────────────────────────────┼──────────────────────┤
+│ Deploy run (GitHub Actions)                             │ $0 (₹0) (public repository)                    │ no                   │
+├─────────────────────────────────────────────────────────┼────────────────────────────────────────────────┼──────────────────────┤
+│ Migration and one-off tasks (~1 minute each on Fargate) │ ≈ ₹0.05 each                                   │ only while running   │
+├─────────────────────────────────────────────────────────┼────────────────────────────────────────────────┼──────────────────────┤
+│ CloudFront refresh (invalidation)                       │ $0 (₹0) (first 1,000 paths per month are free) │ no                   │
+└─────────────────────────────────────────────────────────┴────────────────────────────────────────────────┴──────────────────────┘
+
+Deleting it later
+
+- Task definitions: all revisions are deregistered and deleted with the others at teardown.
+- The deploy role and its policy: deleted with the roles.
+- The CLOUDFRONT_DISTRIBUTION_ID variable: goes with the production environment.
+- What it affects: nothing beyond the shop itself.
+
+Checkpoint
+
+- https://duw6s064srdbv.cloudfront.net/: ShopLite loads over HTTPS with the sample products and prices in ₹.
+- https://duw6s064srdbv.cloudfront.net/api/products/: JSON with the products (no more 400).
+- https://duw6s064srdbv.cloudfront.net/admin/: the Django admin, styled (so /static/ works). Sign in with subin@ontash.net and the admin password.
+- Also try: reload a product page directly (e.g. /products/chef-knife); it must load, not show an S3 error. Register a customer, and place an order. The confirmation email appears in CloudWatch → /ecs/shoplite-worker, because email is set to "print to log".
+
+If any deploy step or check fails, paste its error message or the stopped task's reason.
+
+✻ Brewed for 1m 9s · done 10:57 AM
+                                                                                                                    √ Update installed · Restart to update
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

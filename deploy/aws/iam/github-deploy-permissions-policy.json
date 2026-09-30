@@ -71,6 +71,12 @@
       "Effect": "Allow",
       "Action": ["s3:ListBucket"],
       "Resource": "arn:aws:s3:::<FRONTEND_BUCKET>"
+    },
+    {
+      "Sid": "RefreshTheShopLiteDistributionOnly",
+      "Effect": "Allow",
+      "Action": ["cloudfront:CreateInvalidation"],
+      "Resource": "arn:aws:cloudfront::<ACCOUNT_ID>:distribution/<DISTRIBUTION_ID>"
     }
   ]
 }

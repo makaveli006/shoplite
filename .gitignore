@@ -31,4 +31,4 @@ desktop.ini
 .DS_Store
 
 # Filled-in AWS policy copies (contain the account ID): never committed
-deploy/aws/**/*.local.json
+deploy/aws/**/*.local.*
