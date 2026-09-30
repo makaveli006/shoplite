@@ -11238,3 +11238,100 @@ If any deploy step or check fails, paste its error message or the stopped task's
 ✻ Brewed for 1m 9s · done 10:57 AM
                                                                                                                     √ Update installed · Restart to update
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+
+> without aws secret keys in env vars how the communication happening between github and the aws?
+
+It works through a trust relationship instead of stored keys: GitHub proves who the workflow is, and AWS hands out temporary keys for a few minutes. Step by step, for every deploy run:
+
+1. The workflow asks GitHub for an ID token. Because the job has permissions: id-token: write, the runner can ask GitHub for an OIDC token: a short text signed by GitHub, valid for a few minutes. It says, roughly:
+   - "I'm a workflow from repository makaveli006@96381765/shoplite@1394721505"
+   - "running in the environment production"
+   - "meant for sts.amazonaws.com"
+2. The workflow shows this token to AWS. The step configure-aws-credentials sends it to AWS STS (Security Token Service) with the request: "let me use the role shoplite-github-deploy" (the ARN in your secret AWS_ROLE_ARN). That call is AssumeRoleWithWebIdentity.
+3. AWS checks the token.
+   - Signature: was it really signed by GitHub? AWS knows GitHub's public signing keys because you registered GitHub as an identity provider (token.actions.githubusercontent.com) in IAM. A forged token fails here.
+   - Trust policy: does the role trust this token? Its sub must be exactly repo:makaveli006@96381765/shoplite@1394721505:environment:production, and its audience sts.amazonaws.com. Another repository, another environment, or an unapproved run fails here. That's the "Not authorized" error you saw at first, when the name format didn't match.
+4. AWS hands out temporary keys. If both checks pass, STS returns a temporary access key, secret key and session token, valid for 1 hour, with only the permissions of the role's policy shoplite-deploy (push to ECR, update the ECS services, upload to the frontend bucket, and so on).
+5. The rest of the workflow uses those. The action puts the temporary keys into environment variables inside that one run, so docker push, aws ecs … and aws s3 sync work. When the run ends, the keys disappear; after an hour they're worthless anyway.
+
+Why this is better than storing an access key in GitHub:
+- Nothing to steal: there's no permanent secret in GitHub. The role ARN alone is useless without a GitHub-signed token for your repository and environment.
+- Nothing to rotate: a stored key would need regular replacing, and deleting it if it ever leaked. Here every run gets fresh keys that expire by themselves.
+- Tighter scope: only approved production runs of your repository can get in, and even then only with the deploy role's limited permissions.
+
+The same idea, "prove who you are, get temporary credentials for a role", is how your ECS containers reach S3 and Parameter Store too: they use their task roles, with no keys anywhere in the settings.
+
+
+
+showed me this now lets focus on tear down only, give me steps
+
+Here's the teardown, in the order to follow. Do them one by one; each one depends on the ones before it being finished.
+
+1. Stop GitHub deploying
+GitHub → Settings → Secrets and variables → Actions → Variables → delete DEPLOY_ENABLED (and DEPLOY_IMAGES_ONLY if it's there).
+
+2. Razorpay webhook
+Razorpay Dashboard (Test mode) → Webhooks → the cloudfront.net one → Delete.
+
+3. ECS services and cluster
+- ECS → Clusters → shoplite-cluster → Services → shoplite-web → Update service → Desired tasks 0 → Update.
+- Same for shoplite-worker.
+- Tick both → Delete service → tick Force delete → Delete.
+- Then Delete cluster (type the name).
+
+4. Task definitions
+ECS → Task definitions → shoplite-web → tick all revisions → Actions → Deregister → then again Actions → Delete. Same for shoplite-worker and shoplite-migrate.
+
+5. CloudFront
+CloudFront → Distributions → tick shoplite → Disable. Wait until Last modified shows a date (5–15 minutes) → tick it → Delete.
+
+6. WAF firewall (after 5 is deleted)
+WAF & Shield → Web ACLs → region Global (CloudFront) → tick CreatedByCloudFront-… → Delete.
+
+7. CloudFront leftovers
+CloudFront → Functions → shoplite-spa-routing → Delete. Then CloudFront → Origin access → the OAC → Delete.
+
+8. Load balancer
+EC2 → Load balancers → shoplite-alb → Actions → Delete. Then EC2 → Target groups → shoplite-web-tg → Delete.
+
+9. NAT gateway and its IP
+- VPC → NAT gateways → click shoplite-nat → copy its Allocation ID (eipalloc-…) → Actions → Delete NAT gateway.
+- When it shows Deleted: VPC → Elastic IPs → tick only the one with that Allocation ID → Actions → Release. Don't touch the other 2.
+
+10. Database
+- RDS → Databases → shoplite-db → Actions → Delete → untick Create final snapshot → untick Retain automated backups → type delete me → Delete.
+- When it's gone: RDS → Subnet groups → shoplite-db-subnets → Delete.
+
+11. Queue
+- ElastiCache → Valkey caches → shoplite-cache → Delete → no final backup.
+- When it's gone: ElastiCache → Subnet groups → shoplite-cache-subnets → Delete.
+
+12. VPC (only after 8–11 are fully gone)
+VPC → Your VPCs → shoplite-vpc → Actions → Delete VPC → type delete. If it says something is still attached, wait 5 minutes and try again.
+
+13. S3 buckets
+S3 → shoplite-demo-frontend-subin → Empty → then Delete. Same for shoplite-demo-media-subin.
+
+14. ECR repositories
+ECR → Repositories → tick shoplite/web and shoplite/worker → Delete.
+
+15. Parameters
+Systems Manager → Parameter Store → tick all /shoplite/… → Delete.
+
+16. Log groups
+CloudWatch → Log groups → tick the 3 /ecs/shoplite-* → Actions → Delete.
+
+17. IAM
+- IAM → Roles → search shoplite → tick the 4 roles → Delete.
+- IAM → Identity providers → token.actions.githubusercontent.com → Delete (you created it, and only your deploy role used it).
+
+18. GitHub environment
+GitHub → Settings → Environments → production → Delete environment.
+
+Final check
+- Resource Groups & Tag Editor → Tag Editor → Regions: All regions, Resource types: All supported resource types, Tag key Project, value shoplite-demo → Search resources. It should find nothing.
+- Tomorrow: Billing → Bills: nothing new from ShopLite after today.
+
+Tell me if any step refuses to delete, and what the message says.
