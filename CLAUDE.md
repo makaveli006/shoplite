@@ -63,13 +63,18 @@ Everything comes from env vars via the `env_bool` / `env_list` helpers in `confi
   - `STORAGES['default']` becomes `storages.backends.s3.S3Storage` only when `AWS_STORAGE_BUCKET_NAME` is set (`location='media'`, `custom_domain` = the CloudFront domain, no querystring auth, credentials from the ECS task role).
   - `DJANGO_SECURE_PROXY_SSL_HEADER` (`HTTP_CLOUDFRONT_FORWARDED_PROTO` on AWS), `DB_SSLMODE`, `DB_CONN_MAX_AGE`, and `LOGGING` to stdout (Django's own logger at ERROR, so expected 5xx in tests are wrapped in `assertLogs('django.request', 'ERROR')`).
 - **Health check:** `core.middleware.HealthCheckMiddleware` is **first** in `MIDDLEWARE` and answers `/healthz/` before the ALLOWED_HOSTS check and the SSL redirect (the ALB health checks use the task's IP as host). It never touches the DB.
+- **Django admin path:** `DJANGO_ADMIN_URL` (default `admin/`; `django-admin/` on AWS). The React app has its own `/admin` staff pages, and on AWS both sit behind one CloudFront address, so the Django admin must not use `/admin`.
+- **AWS layout (us-east-1, built by hand in the console, since torn down):** CloudFront is the single HTTPS address. Default behaviour → private S3 frontend bucket (OAC) + the SPA-routing function; `/media/*` → the media bucket; `/api/*`, `/api-auth/*`, `/django-admin/*` (caching disabled, `AllViewerAndCloudFrontHeaders-2022-06`) and `/static/*` (cached) → the ALB. The ALB accepts only the CloudFront prefix list and requests carrying the secret `X-Origin-Verify` header (default action 403). ECS Fargate web + worker, RDS PostgreSQL and ElastiCache Valkey sit in private subnets behind one NAT gateway; secrets come from SSM `/shoplite/*`.
 - **Email thumbnails:** they open images via `product.image.open()` (storage-agnostic, works with S3), never `.path`.
 - **CD:** `.github/workflows/deploy.yml`.
   - **Trigger:** `workflow_run` after CI on `main`, or `workflow_dispatch` with `images_only`. It's gated by the repo variable `DEPLOY_ENABLED` and the `production` environment approval.
   - **Steps:** OIDC → ECR push (tag = commit SHA) → migrate one-off task, which must exit 0 → rolling deploy of the web and worker services → frontend built with `VITE_API_URL=/api` → S3 sync and `index.html` invalidation.
-  - **Task definitions:** the families and container names (`web`, `worker`, `migrate`) must match the ones in AWS.
+  - **Task definitions:** the families and container names (`web`, `worker`, `migrate`) must match the ones in AWS. The pipeline downloads the **current** revision and only swaps the image, so it owns the image tag; a revision edited by hand must start from the latest one.
+  - **OIDC:** the repository uses GitHub's immutable subject, so the deploy role's trust policy `sub` has the form `repo:<owner>@<owner-id>/<repo>@<repo-id>:environment:production`.
+  - **Temporary trigger:** `deploy.yml` has a `push: branches: [feature/aws-deploy]` trigger that must be removed before the branch is merged.
   - **Checks:** validate the workflow with `docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint`.
-- **Console pieces** live in `deploy/aws/` (CloudFront Function for SPA routing on the default behaviour only, so API 404s stay 404s).
+- **Console pieces** live in `deploy/aws/`: IAM policy and task-definition templates with `<PLACEHOLDERS>`, and the CloudFront Function for SPA routing (default behaviour only, so API 404s stay 404s). Filled copies are `*.local.*` and git-ignored; the repository is public, so the AWS account ID, the origin-verify secret and other real IDs must never be committed.
+- **Docs:** `INTERVIEW-DEPLOYMENT.md` explains the manual deployment (architecture, IAM, CI/CD, costs, the problems hit, interview Q&A). Keep it in sync when the deployment design changes; a Terraform rebuild is planned under `infra/terraform/` with its own `INTERVIEW-TERRAFORM.md`.
 
 ### Search (`catalog/search.py`)
 - **One place:** all search rules live in `catalog/search.py`. `ProductViewSet.filter_backends = [DjangoFilterBackend, ProductSearchFilter, ProductOrderingFilter]` (`catalog/filters.py`); DRF's `SearchFilter` is no longer used for products.
@@ -94,7 +99,7 @@ Everything comes from env vars via the `env_bool` / `env_list` helpers in `confi
 - **Main bundle size:** the product page's reviews section (`components/reviews/ProductReviews.tsx`) is `React.lazy`-loaded to keep the main bundle under Vite's 500 kB warning.
 
 ### Payments (`payments` app, Razorpay test mode)
-- **Git rule:** this work lives on the branch `feature/payment-gateway`, with draft PR #1. Never merge it into `main` (or commit/push to `main`) without the developer's explicit permission.
+- **Git rule (for every feature):** work on a `feature/*` branch with a draft PR. Never merge into `main` (or commit/push to `main`) without the developer's explicit permission; the developer usually runs the merge themselves.
 - **Gateway:** `payments/gateway.py` is the only code that talks to Razorpay (`create_razorpay_order`) or knows its signature formulas: HMAC-SHA256 with `hmac.compare_digest`; payment receipts sign `order_id|payment_id` with the key secret, and webhooks sign the **raw body** with the webhook secret. Tests mock `payments.gateway.create_razorpay_order` and sign with dummy secrets via `override_settings(**PAYMENT_SETTINGS)`; they never reach Razorpay.
 - **Money:** amounts are integers in paise (`services.amount_in_paise`, exact via `Decimal`) and always come from the database, never from the browser. The currency is `SHOP_CURRENCY` (default INR; keep `VITE_CURRENCY` equal).
 - **Starting a payment:** `start_payment(order)` requires a pending order of at least ₹1 and reuses a waiting (`created`/`failed`) `Payment` with the same amount.

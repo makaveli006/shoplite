@@ -21,6 +21,7 @@ Customers browse products, fill a cart and check out; staff manage products, cat
 - **Admin area** in the React app (and the Django admin): product create/edit with image upload, categories, all orders with status changes
 - **Permissions enforced by the API**, not only hidden in the UI: customers get `403` on every admin action
 - **Tests**: Django tests for the API and the frontend tested with Vitest + React Testing Library, run on every push by GitHub Actions
+- **Deployed to AWS** as a production-style exercise (ECS Fargate, RDS, ElastiCache, S3, CloudFront), with a CD pipeline that deploys after CI passes and a person approves. It was built by hand in the AWS Console, tested, then deleted to stop the costs; [`INTERVIEW-DEPLOYMENT.md`](INTERVIEW-DEPLOYMENT.md) explains every piece
 
 ## Tech stack
 
@@ -33,7 +34,9 @@ Customers browse products, fill a cart and check out; staff manage products, cat
 | Frontend | React 19, TypeScript, Vite 8, React Router, TanStack Query, Axios |
 | UI | Tailwind CSS 4, shadcn/ui (Radix UI), lucide icons, sonner toasts |
 | Tooling | uv (Python packages), npm, Docker Compose, oxlint, coverage.py, Vitest |
-| CI | GitHub Actions |
+| CI/CD | GitHub Actions (CI on every push; CD to AWS with OIDC sign-in and an approval step) |
+| Production | Docker images (Gunicorn + WhiteNoise for the web, Celery for the worker), django-storages for S3 |
+| AWS | VPC with a NAT gateway, ECS Fargate, Application Load Balancer, RDS PostgreSQL, ElastiCache (Valkey), S3, CloudFront, ECR, SSM Parameter Store, IAM, CloudWatch Logs |
 
 ## How it fits together
 
@@ -54,7 +57,11 @@ PostgreSQL 16 (Docker)            Redis 7 (Docker)
 ```
 shoplite/
 ├── docker-compose.yml       # PostgreSQL, Redis and the Celery worker
-├── .github/workflows/ci.yml # tests on every push
+├── .github/workflows/
+│   ├── ci.yml               # tests on every push
+│   └── deploy.yml           # deployment to AWS after CI passes on main
+├── deploy/aws/              # pieces pasted into the AWS Console: IAM policies, task definitions, CloudFront Function
+├── INTERVIEW-DEPLOYMENT.md  # the AWS deployment explained (architecture, security, costs, problems, Q&A)
 ├── backend/                 # Django project (managed with uv)
 │   ├── config/              # settings, URLs, Celery app
 │   ├── accounts/            # custom user (email login), JWT, password reset
@@ -234,9 +241,10 @@ the temporary machines are deleted
 A failed CI run doesn't undo or block the push: the code is already on GitHub. It warns you
 that something is broken, so you fix it and push again.
 
-### CD: not set up yet (planned)
+### CD: set up for AWS ✅ (switched off while the AWS resources are deleted)
 
-This is how deployment will work once the app has a real server (Gunicorn + Nginx on a cloud machine):
+Defined in [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml). It starts by itself when CI
+finishes on `main` (GitHub's `workflow_run` trigger), and does nothing unless CI passed:
 
 ```
 git push to main
@@ -245,30 +253,30 @@ CI runs (backend tests, frontend tests + build)
    ↓
 CI passes ✅   (if CI fails, nothing is deployed)
    ↓
-CD job starts
+Deploy workflow starts, then waits: a person must click "Approve" on the "production" environment
    ↓
-GitHub Actions connects to the production server through SSH
+GitHub Actions signs in to AWS with a short-lived OIDC token (no AWS keys stored in GitHub)
    ↓
-the server gets the latest code
+build two Docker images (web = Gunicorn + Django, worker = Celery),
+tag them with the commit id, push them to Amazon ECR
    ↓
-backend:
-  uv sync --frozen                                  install/update Python packages
-  uv run python manage.py migrate                   update the database tables
-  uv run python manage.py collectstatic --noinput   gather CSS/JS for the Django admin
+run the database migrations once, as a one-off container
+(if they fail, the deploy stops here and the old version keeps running)
+   ↓
+rolling update of the web and worker services on ECS Fargate:
+new containers start, must pass the /healthz/ check, then the old ones stop → no downtime
+(if the new containers keep failing, ECS rolls back by itself)
    ↓
 frontend:
-  npm ci                                            install/update packages
-  npm run build                                     build the React production files
-  copy frontend/dist to the Nginx web root
-   ↓
-restart Gunicorn (Django)
-restart the Celery worker (so it runs the new task code)
-reload Nginx
-   ↓
-health check: is the site answering?
+  npm ci, npm run build (VITE_API_URL=/api)
+  upload the files to the S3 bucket
+  tell CloudFront to fetch the new index.html
    ↓
 deployment complete ✅, the new version is live
 ```
+
+It only runs while the repository variable `DEPLOY_ENABLED` is `true`. After the AWS resources were
+deleted, that variable was removed too, so pushes don't try to deploy to nothing.
 
 #### Where the production credentials are stored
 
@@ -276,12 +284,12 @@ They are split between two places, and neither of them is the code in this repos
 
 | Where | What is stored there | Why there |
 |---|---|---|
-| **GitHub Secrets** (repo → Settings → Secrets and variables → Actions) | only what GitHub needs to *reach* the server: the SSH private key, the server address, the SSH user name | the CD job needs them to connect. GitHub keeps them encrypted, hides them in logs, and nobody can read them back after saving (not even you) |
-| **On the server**, in `backend/.env` (created once by hand, readable only by the app's user) | the app's own secrets: `DJANGO_SECRET_KEY`, the database password, `EMAIL_HOST_PASSWORD`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_DEBUG=False`, … | Django reads them when it starts on the server. They never pass through GitHub, so a leaked GitHub account or workflow log can't expose them |
+| **GitHub** (repo → Settings → Environments → `production`) | only the *address* of an AWS role (`AWS_ROLE_ARN`, saved as a secret so it's hidden in the public logs) plus non-secret names: cluster, services, bucket, subnets | GitHub needs no password for AWS: AWS trusts GitHub's short-lived OIDC token, but only for this repository and only for the `production` environment, which needs a person's approval |
+| **In AWS, in SSM Parameter Store** (encrypted `SecureString` values under `/shoplite/`) | the app's own secrets: `DJANGO_SECRET_KEY`, the database password, the Razorpay secrets | ECS reads them when a container starts and hands them to Django as environment variables. They never pass through GitHub, so a leaked GitHub account or workflow log can't expose them |
 
-So GitHub only holds the *key to the server's door*. The secrets of the shop itself stay inside the server,
-and deployments never touch that `.env` file: `git pull` leaves it alone because `.env` is git-ignored.
-`VITE_API_URL` is not a secret (every visitor's browser can see it), so it can simply sit in `frontend/.env` on the server.
+The non-secret settings (`DJANGO_ALLOWED_HOSTS`, the database address, the bucket name, …) are plain
+environment variables in the ECS task definitions; templates are in `deploy/aws/task-definitions/`.
+`VITE_API_URL` is not a secret (every visitor's browser can see it), so the workflow sets it while building.
 
 ## API overview
 
@@ -333,12 +341,17 @@ docker build --target worker -t shoplite-worker .  # the Celery worker (also wha
 Everything cloud-specific is switched on by environment variables only, so the same code runs on a
 laptop and on a server (see the "On AWS" block in `backend\.env.example`):
 uploads go to Amazon S3 when `AWS_STORAGE_BUCKET_NAME` is set, the load balancer's health check is
-answered at `/healthz/`, logs go to the container output, and `DB_SSLMODE=require` encrypts the
-database connection.
+answered at `/healthz/`, logs go to the container output, `DB_SSLMODE=require` encrypts the
+database connection, and `DJANGO_ADMIN_URL` moves the Django admin (on AWS it is `/django-admin/`,
+because the React app's own staff pages use `/admin` on the same address).
 
-**Deployment to AWS** (ECS Fargate, RDS, ElastiCache, S3, CloudFront): `.github/workflows/deploy.yml`
-deploys after CI passes on `main` and a reviewer approves the `production` environment. It signs in
-to AWS with OIDC (no AWS keys stored in GitHub), pushes the images to ECR, runs the migrations as a
-one-off task, rolls the ECS services onto the new images, and uploads the React app to S3. It only runs
-when the repository variable `DEPLOY_ENABLED` is `true`. `deploy/aws/` holds pieces pasted into the
-AWS Console (e.g. the CloudFront Function for React page addresses).
+**Deployment to AWS.** CloudFront is the one HTTPS address: it serves the React app from S3 and sends
+`/api/*`, `/django-admin/*` and `/static/*` to a load balancer in front of the ECS Fargate containers.
+The database (RDS PostgreSQL) and the Celery queue (ElastiCache) have no public address. The CD pipeline
+is described in the [CI/CD](#cicd) section. `deploy/aws/` holds the pieces pasted into the AWS Console:
+IAM policies, task-definition templates (with `<PLACEHOLDERS>`; filled copies are named `*.local.json`
+and git-ignored) and the CloudFront Function for React page addresses.
+
+The full walkthrough is in [`INTERVIEW-DEPLOYMENT.md`](INTERVIEW-DEPLOYMENT.md): the architecture,
+networking, security, costs (about ₹16 an hour while running), the problems found on the way and how
+they were fixed, the teardown, and interview questions.
