@@ -3,6 +3,8 @@
 __pycache__/
 *.py[cod]
 media/
+staticfiles/
+email-previews/
 .env
 *.sqlite3
 .pytest_cache/

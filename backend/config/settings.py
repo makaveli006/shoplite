@@ -75,11 +75,16 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # First of all: answers the load balancer's /healthz/ checks before the host check
+    # (they arrive with the container's IP as host) and before the HTTPS redirect.
+    'core.middleware.HealthCheckMiddleware',
     # Must be as high as possible, and before CommonMiddleware, so CORS headers are
     # added to every response (including errors and redirects) and preflight
     # OPTIONS requests are answered early.
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # Serves the collected static files (the admin's CSS/JS) from the web container itself.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -123,13 +128,25 @@ DATABASES = {
         'OPTIONS': {
             # Give up after 5 seconds instead of hanging when the database is down.
             'connect_timeout': 5,
+            # "require" on AWS: the connection to RDS is encrypted. "prefer" (the default)
+            # uses encryption when the server offers it, like the local Docker database.
+            'sslmode': os.getenv('DB_SSLMODE', 'prefer'),
         },
+        # Keep a database connection open between requests for this many seconds
+        # (0 = a new connection per request, fine locally; ~60 on a real server).
+        'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '0')),
+        'CONN_HEALTH_CHECKS': True,  # check a kept connection still works before reusing it
     }
 }
 
 # Use our own user model (accounts/models.py) instead of django.contrib.auth's User.
 # Must be set BEFORE the first `migrate`.
 AUTH_USER_MODEL = 'accounts.User'
+
+# Where the Django admin lives. Locally "admin/" (http://127.0.0.1:8000/admin/). On AWS the React
+# shop and Django share one address, and React has its own /admin pages, so there it's
+# "django-admin/". Must end with a slash.
+DJANGO_ADMIN_URL = os.getenv('DJANGO_ADMIN_URL', 'admin/')
 
 # Where the browsable API's "Log in" page (/api-auth/login/) goes after signing in, when
 # it doesn't know the page you came from. Django's default, /accounts/profile/, doesn't exist here.
@@ -271,12 +288,43 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Where files are kept. Locally: uploads on disk (MEDIA_ROOT), static files served as they are.
+# On a server (DEBUG off): static files compressed and given "fingerprinted" names by
+# WhiteNoise, so browsers can cache them forever. With AWS_STORAGE_BUCKET_NAME set, uploads
+# go to Amazon S3 instead of the disk (containers lose their disk when they're replaced).
+STORAGES = {
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {
+        'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage' if DEBUG
+        else 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+    },
+}
+AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME', '')
+if AWS_STORAGE_BUCKET_NAME:
+    STORAGES['default'] = {
+        'BACKEND': 'storages.backends.s3.S3Storage',
+        'OPTIONS': {
+            'bucket_name': AWS_STORAGE_BUCKET_NAME,
+            'region_name': os.getenv('AWS_S3_REGION_NAME', 'us-east-1'),
+            'location': 'media',  # keys like media/products/2026/09/mug.jpg
+            # Links point at CloudFront (https://dxxxx.cloudfront.net/media/...), which reads
+            # the private bucket. No AWS keys here: boto3 uses the container's IAM role.
+            'custom_domain': os.getenv('AWS_S3_CUSTOM_DOMAIN') or None,
+            'querystring_auth': False,  # plain links, not temporary signed ones
+            'file_overwrite': False,  # two uploads named mug.jpg don't replace each other
+            'default_acl': None,  # the bucket's own settings decide access (it stays private)
+        },
+    }
+
 # Production security. Only active when DEBUG is off (i.e. on a real server with HTTPS).
 # Check with:  manage.py check --deploy
 CSRF_TRUSTED_ORIGINS = env_list('DJANGO_CSRF_TRUSTED_ORIGINS')  # e.g. https://api.shoplite.example
 if not DEBUG:
     SECURE_SSL_REDIRECT = env_bool('DJANGO_SECURE_SSL_REDIRECT', True)  # http:// -> https://
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')  # we run behind a proxy that handles HTTPS
+    # How Django learns the visitor used HTTPS when a proxy in front handled it.
+    # Default: the X-Forwarded-Proto header. Behind CloudFront -> load balancer (plain HTTP
+    # between them) it's CloudFront's own header: HTTP_CLOUDFRONT_FORWARDED_PROTO.
+    SECURE_PROXY_SSL_HEADER = (os.getenv('DJANGO_SECURE_PROXY_SSL_HEADER', 'HTTP_X_FORWARDED_PROTO'), 'https')
     SESSION_COOKIE_SECURE = True  # cookies only over HTTPS
     CSRF_COOKIE_SECURE = True
     # Tell browsers "always use HTTPS for this site". Start small (e.g. 3600) and raise
@@ -284,6 +332,20 @@ if not DEBUG:
     SECURE_HSTS_SECONDS = int(os.getenv('DJANGO_SECURE_HSTS_SECONDS', '3600'))
     SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool('DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS', False)
     SECURE_HSTS_PRELOAD = False
+
+# Logs go to the terminal (stdout). On AWS, ECS sends each container's output to CloudWatch Logs.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {'simple': {'format': '{levelname} {name}: {message}', 'style': '{'}},
+    'handlers': {'console': {'class': 'logging.StreamHandler', 'formatter': 'simple'}},
+    'root': {'handlers': ['console'], 'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO')},
+    'loggers': {
+        # Django's own messages: errors only (e.g. a 500 error with its traceback). Every request
+        # (including 404s) is already in Gunicorn's access log, so warnings would be noise.
+        'django': {'handlers': ['console'], 'level': os.getenv('DJANGO_LOG_LEVEL_DJANGO', 'ERROR'), 'propagate': False},
+    },
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field

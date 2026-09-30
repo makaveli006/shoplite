@@ -9,6 +9,21 @@ from .emails import InlineImages, format_money, product_thumbnail
 from .testing import TemporaryMediaMixin, make_category, make_picture, make_product
 
 
+class HealthCheckTests(SimpleTestCase):
+    """The load balancer's /healthz/ check (core/middleware.py)."""
+
+    def test_answers_ok_even_for_a_host_django_would_refuse(self):
+        # The load balancer uses the container's private IP address as the host name.
+        response = self.client.get('/healthz/', HTTP_HOST='10.0.12.34:8000')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b'ok')
+
+    def test_other_addresses_still_check_the_host(self):
+        with self.assertLogs('django.security.DisallowedHost', 'ERROR'):
+            response = self.client.get('/api/products/', HTTP_HOST='10.0.12.34:8000')
+        self.assertEqual(response.status_code, 400)  # DisallowedHost, as before
+
+
 class FormatMoneyTests(SimpleTestCase):
     def test_known_currencies_use_their_symbol(self):
         with override_settings(SHOP_CURRENCY='USD'):

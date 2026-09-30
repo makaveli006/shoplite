@@ -56,6 +56,21 @@ Everything comes from env vars via the `env_bool` / `env_list` helpers in `confi
 - The allowed transitions are **mirrored in the frontend** (the next-step buttons in `frontend/src/pages/admin/AdminOrdersPage.tsx`); keep both in sync.
 - Catalog resources are looked up by `slug`. Deleting a category that still has products returns 409 (`ProtectedError`). The category list is annotated with `product_count` and is not paginated.
 
+### Deployment (AWS; branch `feature/aws-deploy`)
+- **Images:** `backend/Dockerfile` has three stages: `base` (uv deps), `web` (Gunicorn; `collectstatic` runs at build time with placeholder env vars) and `worker` (Celery; the last stage, so it's the default). `docker-compose.yml` builds `target: worker`.
+- **Cloud features are environment-driven, and local stays the default:**
+  - WhiteNoise middleware always serves static files; `CompressedManifestStaticFilesStorage` is used only when `DEBUG` is off.
+  - `STORAGES['default']` becomes `storages.backends.s3.S3Storage` only when `AWS_STORAGE_BUCKET_NAME` is set (`location='media'`, `custom_domain` = the CloudFront domain, no querystring auth, credentials from the ECS task role).
+  - `DJANGO_SECURE_PROXY_SSL_HEADER` (`HTTP_CLOUDFRONT_FORWARDED_PROTO` on AWS), `DB_SSLMODE`, `DB_CONN_MAX_AGE`, and `LOGGING` to stdout (Django's own logger at ERROR, so expected 5xx in tests are wrapped in `assertLogs('django.request', 'ERROR')`).
+- **Health check:** `core.middleware.HealthCheckMiddleware` is **first** in `MIDDLEWARE` and answers `/healthz/` before the ALLOWED_HOSTS check and the SSL redirect (the ALB health checks use the task's IP as host). It never touches the DB.
+- **Email thumbnails:** they open images via `product.image.open()` (storage-agnostic, works with S3), never `.path`.
+- **CD:** `.github/workflows/deploy.yml`.
+  - **Trigger:** `workflow_run` after CI on `main`, or `workflow_dispatch` with `images_only`. It's gated by the repo variable `DEPLOY_ENABLED` and the `production` environment approval.
+  - **Steps:** OIDC → ECR push (tag = commit SHA) → migrate one-off task, which must exit 0 → rolling deploy of the web and worker services → frontend built with `VITE_API_URL=/api` → S3 sync and `index.html` invalidation.
+  - **Task definitions:** the families and container names (`web`, `worker`, `migrate`) must match the ones in AWS.
+  - **Checks:** validate the workflow with `docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint`.
+- **Console pieces** live in `deploy/aws/` (CloudFront Function for SPA routing on the default behaviour only, so API 404s stay 404s).
+
 ### Search (`catalog/search.py`)
 - **One place:** all search rules live in `catalog/search.py`. `ProductViewSet.filter_backends = [DjangoFilterBackend, ProductSearchFilter, ProductOrderingFilter]` (`catalog/filters.py`); DRF's `SearchFilter` is no longer used for products.
 - **Matching:** PostgreSQL full-text search (`SearchQuery(search_type='websearch', config='english')`, so `"phrase"` / `-word` work) over name (weight A) + category name (B) + description (C). **Typo tolerance is a fallback:** `TrigramWordSimilarity` on the name (≥ `TYPO_SIMILARITY` 0.35) counts only when nothing matches exactly, and `-words` are excluded in both modes.

@@ -39,7 +39,9 @@ def product_thumbnail(product):
     if product is None or not product.image:
         return None
     try:
-        with Image.open(product.image.path) as picture:
+        # Opened through Django's file storage (not a path on disk), so this works both with
+        # files on this computer and with pictures stored in Amazon S3.
+        with product.image.open('rb') as file, Image.open(file) as picture:
             # JPEG has no transparency: put transparent pictures on a white background.
             picture = picture.convert('RGBA')
             flat = Image.new('RGB', picture.size, 'white')
@@ -49,7 +51,8 @@ def product_thumbnail(product):
         buffer = io.BytesIO()
         square.save(buffer, format='JPEG', quality=85)
         return buffer.getvalue()
-    except (OSError, ValueError):  # missing file, not a picture, damaged file
+    except Exception:  # missing file, not a picture, damaged file, S3 unreachable, ...
+        # Deliberately broad: a picture problem must never stop the email itself.
         logger.warning('Could not make an email thumbnail for product %s', product.pk, exc_info=True)
         return None
 

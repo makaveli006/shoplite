@@ -1,0 +1,198 @@
+# Continuous Deployment to AWS: after CI passes on main (or when started by hand), and after a
+# person approves the "production" environment on GitHub:
+#   1. sign in to AWS with a short-lived OIDC token (no AWS keys are stored in GitHub)
+#   2. build the web and worker images, tagged with the commit, and push them to Amazon ECR
+#   3. run the database migrations as a one-off ECS task, and stop if they fail
+#   4. roll the web and worker ECS services onto the new images (no downtime)
+#   5. build the React app, upload it to S3, and refresh CloudFront's copy of index.html
+#
+# Settings live in GitHub, not in this file:
+# Repository variables:
+#   DEPLOY_ENABLED=true      switches this workflow on (delete it after the AWS resources are
+#                            removed, so pushes don't try to deploy to nothing)
+#   DEPLOY_IMAGES_ONLY=true  only build and push the images (the first run, before the ECS
+#                            services exist); delete it afterwards
+# Environment "production" secret (a secret so it's hidden in the public logs):
+#   AWS_ROLE_ARN
+# Environment "production" variables: AWS_REGION, ECR_REPOSITORY_WEB, ECR_REPOSITORY_WORKER,
+# ECS_CLUSTER, ECS_SERVICE_WEB, ECS_SERVICE_WORKER, ECS_TASK_FAMILY_WEB, ECS_TASK_FAMILY_WORKER,
+# ECS_TASK_FAMILY_MIGRATE, PRIVATE_SUBNETS (comma-separated), MIGRATE_SECURITY_GROUP,
+# FRONTEND_BUCKET, CLOUDFRONT_DISTRIBUTION_ID, VITE_CURRENCY.
+name: Deploy to AWS
+
+on:
+  workflow_dispatch:
+    inputs:
+      images_only:
+        description: Only build and push the images (the first run, before the ECS services exist)
+        type: boolean
+        default: false
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # TEMPORARY, while this work lives on its feature branch: GitHub only offers "Run workflow"
+  # for workflows that are already on main. Remove this trigger before merging into main.
+  push:
+    branches: [feature/aws-deploy]
+
+# One deployment at a time, and never cancel one half-way.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # lets the job ask GitHub for the OIDC token that AWS trusts
+
+jobs:
+  deploy:
+    name: Deploy to production
+    # Switched on at all, and for runs after CI: only when CI passed.
+    if: >-
+      vars.DEPLOY_ENABLED == 'true' &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    environment: production # a required reviewer must approve before this job starts
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      # The exact commit CI tested (for runs after CI) or the pushed / chosen one.
+      IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
+      CLUSTER: ${{ vars.ECS_CLUSTER }}
+      IMAGES_ONLY: ${{ inputs.images_only || vars.DEPLOY_IMAGES_ONLY == 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.IMAGE_TAG }}
+
+      - name: Sign in to AWS (OIDC role, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          mask-aws-account-id: true # the repository is public: hide the account number in the logs
+
+      - name: Sign in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push the images
+        id: images
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          WEB="$REGISTRY/${{ vars.ECR_REPOSITORY_WEB }}:$IMAGE_TAG"
+          WORKER="$REGISTRY/${{ vars.ECR_REPOSITORY_WORKER }}:$IMAGE_TAG"
+          docker build --target web -t "$WEB" backend
+          docker build --target worker -t "$WORKER" backend
+          docker push "$WEB"
+          docker push "$WORKER"
+          echo "web=$WEB" >> "$GITHUB_OUTPUT"
+          echo "worker=$WORKER" >> "$GITHUB_OUTPUT"
+
+      # ---- everything below needs the ECS services etc. to exist ----
+      - name: Download the current task definitions
+        if: env.IMAGES_ONLY != 'true'
+        run: |
+          # AWS adds read-only fields when it shows a task definition; remove them so it can be registered again.
+          for pair in web:${{ vars.ECS_TASK_FAMILY_WEB }} worker:${{ vars.ECS_TASK_FAMILY_WORKER }} migrate:${{ vars.ECS_TASK_FAMILY_MIGRATE }}; do
+            name="${pair%%:*}"; family="${pair#*:}"
+            aws ecs describe-task-definition --task-definition "$family" --query taskDefinition \
+              | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+              > "task-$name.json"
+          done
+
+      - name: Put the new web image into the web task definition
+        if: env.IMAGES_ONLY != 'true'
+        id: render-web
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-web.json
+          container-name: web
+          image: ${{ steps.images.outputs.web }}
+
+      - name: Put the new web image into the migrate task definition
+        if: env.IMAGES_ONLY != 'true'
+        id: render-migrate
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-migrate.json
+          container-name: migrate
+          image: ${{ steps.images.outputs.web }}
+
+      - name: Put the new worker image into the worker task definition
+        if: env.IMAGES_ONLY != 'true'
+        id: render-worker
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-worker.json
+          container-name: worker
+          image: ${{ steps.images.outputs.worker }}
+
+      - name: Run the database migrations (one-off task) and stop if they fail
+        if: env.IMAGES_ONLY != 'true'
+        env:
+          TASK_FILE: ${{ steps.render-migrate.outputs.task-definition }}
+        run: |
+          TASK_DEF=$(aws ecs register-task-definition --cli-input-json "file://$TASK_FILE" \
+            --query taskDefinition.taskDefinitionArn --output text)
+          TASK=$(aws ecs run-task --cluster "$CLUSTER" --task-definition "$TASK_DEF" --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ vars.PRIVATE_SUBNETS }}],securityGroups=[${{ vars.MIGRATE_SECURITY_GROUP }}],assignPublicIp=DISABLED}" \
+            --query 'tasks[0].taskArn' --output text)
+          echo "Migration task: $TASK"
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$TASK"
+          EXIT_CODE=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "::error::Migrations failed (exit code $EXIT_CODE). Nothing was deployed. See the migrate logs in CloudWatch."
+            exit 1
+          fi
+
+      - name: Deploy the web service (rolling, no downtime)
+        if: env.IMAGES_ONLY != 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-web.outputs.task-definition }}
+          service: ${{ vars.ECS_SERVICE_WEB }}
+          cluster: ${{ vars.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Deploy the worker service
+        if: env.IMAGES_ONLY != 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-worker.outputs.task-definition }}
+          service: ${{ vars.ECS_SERVICE_WORKER }}
+          cluster: ${{ vars.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Install Node.js 22
+        if: env.IMAGES_ONLY != 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build the React app
+        if: env.IMAGES_ONLY != 'true'
+        working-directory: frontend
+        env:
+          VITE_API_URL: /api # same address as the shop: CloudFront sends /api/* to the load balancer
+          VITE_CURRENCY: ${{ vars.VITE_CURRENCY || 'INR' }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload the React app to S3 and refresh CloudFront
+        if: env.IMAGES_ONLY != 'true'
+        env:
+          BUCKET: ${{ vars.FRONTEND_BUCKET }}
+        run: |
+          # Files with a fingerprint in their name never change: browsers may keep them for a year.
+          aws s3 sync frontend/dist "s3://$BUCKET" --delete --exclude index.html \
+            --cache-control "public,max-age=31536000,immutable"
+          # index.html points at the newest files: always check for a new version.
+          aws s3 cp frontend/dist/index.html "s3://$BUCKET/index.html" --cache-control "no-cache"
+          aws cloudfront create-invalidation --distribution-id "${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}" \
+            --paths "/index.html"

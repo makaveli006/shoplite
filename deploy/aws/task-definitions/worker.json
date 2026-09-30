@@ -1,0 +1,48 @@
+{
+  "family": "shoplite-worker",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "runtimePlatform": { "cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX" },
+  "executionRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/shoplite-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/shoplite-worker-task-role",
+  "containerDefinitions": [
+    {
+      "name": "worker",
+      "image": "<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/shoplite/worker:<IMAGE_TAG>",
+      "essential": true,
+      "environment": [
+        { "name": "DJANGO_DEBUG", "value": "False" },
+        { "name": "DJANGO_ALLOWED_HOSTS", "value": "<CLOUDFRONT_DOMAIN>" },
+        { "name": "DJANGO_CSRF_TRUSTED_ORIGINS", "value": "https://<CLOUDFRONT_DOMAIN>" },
+        { "name": "FRONTEND_URL", "value": "https://<CLOUDFRONT_DOMAIN>" },
+        { "name": "DJANGO_LOG_LEVEL", "value": "INFO" },
+        { "name": "DJANGO_ADMIN_URL", "value": "django-admin/" },
+        { "name": "DB_NAME", "value": "shoplite" },
+        { "name": "DB_USER", "value": "shoplite" },
+        { "name": "DB_HOST", "value": "<DB_HOST>" },
+        { "name": "DB_PORT", "value": "5432" },
+        { "name": "DB_SSLMODE", "value": "require" },
+        { "name": "CELERY_BROKER_URL", "value": "redis://<CACHE_ENDPOINT>/0" },
+        { "name": "AWS_STORAGE_BUCKET_NAME", "value": "<MEDIA_BUCKET>" },
+        { "name": "AWS_S3_REGION_NAME", "value": "us-east-1" },
+        { "name": "AWS_S3_CUSTOM_DOMAIN", "value": "<CLOUDFRONT_DOMAIN>" },
+        { "name": "SHOP_CURRENCY", "value": "INR" },
+        { "name": "EMAIL_BACKEND", "value": "django.core.mail.backends.console.EmailBackend" }
+      ],
+      "secrets": [
+        { "name": "DJANGO_SECRET_KEY", "valueFrom": "arn:aws:ssm:us-east-1:<ACCOUNT_ID>:parameter/shoplite/DJANGO_SECRET_KEY" },
+        { "name": "DB_PASSWORD", "valueFrom": "arn:aws:ssm:us-east-1:<ACCOUNT_ID>:parameter/shoplite/DB_PASSWORD" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/shoplite-worker",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "worker"
+        }
+      }
+    }
+  ]
+}
