@@ -32,11 +32,14 @@
         { "name": "AWS_S3_REGION_NAME", "value": "us-east-1" },
         { "name": "AWS_S3_CUSTOM_DOMAIN", "value": "<CLOUDFRONT_DOMAIN>" },
         { "name": "SHOP_CURRENCY", "value": "INR" },
-        { "name": "EMAIL_BACKEND", "value": "django.core.mail.backends.console.EmailBackend" }
+        { "name": "EMAIL_BACKEND", "value": "django.core.mail.backends.console.EmailBackend" },
+        { "name": "RAZORPAY_KEY_ID", "value": "<RAZORPAY_KEY_ID>" }
       ],
       "secrets": [
         { "name": "DJANGO_SECRET_KEY", "valueFrom": "arn:aws:ssm:us-east-1:<ACCOUNT_ID>:parameter/shoplite/DJANGO_SECRET_KEY" },
-        { "name": "DB_PASSWORD", "valueFrom": "arn:aws:ssm:us-east-1:<ACCOUNT_ID>:parameter/shoplite/DB_PASSWORD" }
+        { "name": "DB_PASSWORD", "valueFrom": "arn:aws:ssm:us-east-1:<ACCOUNT_ID>:parameter/shoplite/DB_PASSWORD" },
+        { "name": "RAZORPAY_KEY_SECRET", "valueFrom": "arn:aws:ssm:us-east-1:<ACCOUNT_ID>:parameter/shoplite/RAZORPAY_KEY_SECRET" },
+        { "name": "RAZORPAY_WEBHOOK_SECRET", "valueFrom": "arn:aws:ssm:us-east-1:<ACCOUNT_ID>:parameter/shoplite/RAZORPAY_WEBHOOK_SECRET" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
