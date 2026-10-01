@@ -1,0 +1,3 @@
+# Copy to backend.hcl (git-ignored) and fill in the bucket name printed by bootstrap/.
+bucket  = "shoplite-tfstate-xxxxxx"
+profile = "shoplite-terraform"

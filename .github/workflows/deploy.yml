@@ -31,10 +31,6 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
-  # TEMPORARY, while this work lives on its feature branch: GitHub only offers "Run workflow"
-  # for workflows that are already on main. Remove this trigger before merging into main.
-  push:
-    branches: [feature/aws-deploy]
 
 # One deployment at a time, and never cancel one half-way.
 concurrency:

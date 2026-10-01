@@ -32,3 +32,14 @@ desktop.ini
 
 # Filled-in AWS policy copies (contain the account ID): never committed
 deploy/aws/**/*.local.*
+
+# Terraform: downloaded providers, state (records of real resources), and real variable values
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+infra/terraform/**/*.tfvars
+!infra/terraform/**/*.tfvars.example
+infra/terraform/backend.hcl
