@@ -2,6 +2,7 @@
 # person approves the "production" environment on GitHub:
 #   1. sign in to AWS with a short-lived OIDC token (no AWS keys are stored in GitHub)
 #   2. build the web and worker images, tagged with the commit, and push them to Amazon ECR
+#      (skipped when ECR already has that commit: re-runs and rollbacks reuse the image)
 #   3. run the database migrations as a one-off ECS task, and stop if they fail
 #   4. roll the web and worker ECS services onto the new images (no downtime)
 #   5. build the React app, upload it to S3, and refresh CloudFront's copy of index.html
@@ -72,19 +73,34 @@ jobs:
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push the images
+      - name: Build and push the images (skipped if this commit was already built)
         id: images
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY_WEB: ${{ vars.ECR_REPOSITORY_WEB }}
+          REPOSITORY_WORKER: ${{ vars.ECR_REPOSITORY_WORKER }}
         run: |
-          WEB="$REGISTRY/${{ vars.ECR_REPOSITORY_WEB }}:$IMAGE_TAG"
-          WORKER="$REGISTRY/${{ vars.ECR_REPOSITORY_WORKER }}:$IMAGE_TAG"
-          docker build --target web -t "$WEB" backend
-          docker build --target worker -t "$WORKER" backend
-          docker push "$WEB"
-          docker push "$WORKER"
-          echo "web=$WEB" >> "$GITHUB_OUTPUT"
-          echo "worker=$WORKER" >> "$GITHUB_OUTPUT"
+          # ECR tags are immutable, so an image for a commit that was already built (re-running a
+          # deploy, or rolling back by deploying an older commit) can't be pushed again. It doesn't
+          # need to be either: the same commit gives the same image, so we reuse it.
+          for app in web worker; do
+            if [ "$app" = web ]; then repository="$REPOSITORY_WEB"; else repository="$REPOSITORY_WORKER"; fi
+            image="$REGISTRY/$repository:$IMAGE_TAG"
+
+            if result=$(aws ecr describe-images --repository-name "$repository" \
+                --image-ids imageTag="$IMAGE_TAG" 2>&1); then
+              echo "$image already exists: skipping the build"
+            elif echo "$result" | grep -q ImageNotFoundException; then
+              docker build --target "$app" -t "$image" backend
+              docker push "$image"
+            else
+              # Any other error (e.g. a missing permission) must stop the deploy, not be guessed around.
+              echo "$result"
+              exit 1
+            fi
+
+            echo "$app=$image" >> "$GITHUB_OUTPUT"
+          done
 
       # ---- everything below needs the ECS services etc. to exist ----
       - name: Download the current task definitions

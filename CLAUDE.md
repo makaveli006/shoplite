@@ -68,7 +68,7 @@ Everything comes from env vars via the `env_bool` / `env_list` helpers in `confi
 - **Email thumbnails:** they open images via `product.image.open()` (storage-agnostic, works with S3), never `.path`.
 - **CD:** `.github/workflows/deploy.yml`.
   - **Trigger:** `workflow_run` after CI on `main`, or `workflow_dispatch` with `images_only`. It's gated by the repo variable `DEPLOY_ENABLED` and the `production` environment approval.
-  - **Steps:** OIDC → ECR push (tag = commit SHA) → migrate one-off task, which must exit 0 → rolling deploy of the web and worker services → frontend built with `VITE_API_URL=/api` → S3 sync and `index.html` invalidation.
+  - **Steps:** OIDC → ECR push (tag = commit SHA; skipped via `ecr:DescribeImages` when that tag already exists, because tags are immutable, so re-runs and rollbacks to older commits work) → migrate one-off task, which must exit 0 → rolling deploy of the web and worker services → frontend built with `VITE_API_URL=/api` → S3 sync and `index.html` invalidation.
   - **Task definitions:** the families and container names (`web`, `worker`, `migrate`) must match the ones in AWS. The pipeline downloads the **current** revision and only swaps the image, so it owns the image tag; a revision edited by hand must start from the latest one.
   - **OIDC:** the repository uses GitHub's immutable subject, so the deploy role's trust policy `sub` has the form `repo:<owner>@<owner-id>/<repo>@<repo-id>:environment:production`.
   - **Feature branches:** `deploy.yml` is on `main`, so a feature branch is deployed with "Run workflow" (choose the branch); there is no push trigger.

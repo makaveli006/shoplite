@@ -63,6 +63,7 @@ data "aws_iam_policy_document" "github_deploy" {
       "ecr:CompleteLayerUpload",
       "ecr:PutImage",
       "ecr:BatchGetImage",
+      "ecr:DescribeImages", # "was this commit already built?" (deploy.yml skips the build if so)
     ]
     resources = [for repository in aws_ecr_repository.app : repository.arn]
   }
