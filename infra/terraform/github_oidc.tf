@@ -72,9 +72,14 @@ data "aws_iam_policy_document" "github_deploy" {
     resources = ["*"] # these actions don't support resource limits
   }
   statement {
-    sid       = "UpdateShopLiteServices"
-    actions   = ["ecs:UpdateService", "ecs:DescribeServices"]
-    resources = [aws_ecs_service.web.id, aws_ecs_service.worker.id]
+    sid     = "UpdateShopLiteServices"
+    actions = ["ecs:UpdateService", "ecs:DescribeServices"]
+    # Built from the names rather than read from the service resources: otherwise every change to
+    # a service (e.g. its container count) made this policy show as "known after apply" in plans.
+    resources = [
+      for service in ["web", "worker"] :
+      "arn:aws:ecs:${var.region}:${var.account_id}:service/${aws_ecs_cluster.main.name}/${var.name}-${service}"
+    ]
   }
   statement {
     sid       = "RunTheMigrationTask"
