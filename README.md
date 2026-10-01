@@ -63,6 +63,7 @@ shoplite/
 ├── deploy/aws/              # pieces pasted into the AWS Console: IAM policies, task definitions, CloudFront Function
 ├── infra/terraform/         # the same AWS setup as code (Terraform), plus bootstrap/ for the state bucket
 ├── INTERVIEW-DEPLOYMENT.md  # the AWS deployment explained (architecture, security, costs, problems, Q&A)
+├── INTERVIEW-TERRAFORM.md   # the Terraform rebuild explained (state, secrets, pipeline split, drift, Q&A)
 ├── backend/                 # Django project (managed with uv)
 │   ├── config/              # settings, URLs, Celery app
 │   ├── accounts/            # custom user (email login), JWT, password reset
@@ -374,6 +375,11 @@ terraform destroy                               # delete everything Terraform cr
 Real values (account number, emails) go in `terraform.tfvars` and `backend.hcl`, both git-ignored;
 the `.example` files show the shape. Passwords are generated during the run or typed into hidden
 prompts, and are never saved in the state file.
+
+It was applied (about 80 resources in about 20 minutes), deployed to by the CI/CD pipeline, tested
+end to end, and destroyed again. [`INTERVIEW-TERRAFORM.md`](INTERVIEW-TERRAFORM.md) explains the code,
+the state and locking, how secrets stay out of the state, how Terraform and the pipeline share ECS,
+the real run step by step, and interview questions.
 
 #### Drift: when AWS and the code disagree
 

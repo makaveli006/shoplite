@@ -90,6 +90,7 @@ Everything comes from env vars via the `env_bool` / `env_list` helpers in `confi
   - Pipeline deploys must **not** show as drift: that's what `ignore_changes = [task_definition]` is for. After a deploy, the plan should not touch the services.
   - Avoid making IAM policy documents depend on attributes of resources that change often. Referencing `aws_ecs_service.*.id` made the deploy policy show "known after apply" whenever a service changed, so the service ARNs are built from names in `github_oidc.tf`.
   - Security-group rules are separate `aws_vpc_security_group_*_rule` resources, so a rule added by hand is **not** detected. Only resources in the state are compared.
+- **Docs:** `INTERVIEW-TERRAFORM.md` explains the code and the real apply/test/destroy run. Keep it in sync when the Terraform design changes.
 - **Real values:** `terraform.tfvars` (git-ignored; it holds the account ID). The `.example` files show the shape. Commit `.terraform.lock.hcl` (locked for windows_amd64 and linux_amd64).
 
 ### Search (`catalog/search.py`)
