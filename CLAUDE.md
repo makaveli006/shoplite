@@ -156,6 +156,24 @@ Emails sent by a task that the test calls directly land in `mail.outbox`. Celery
   - The providers are passed as a `wrapper`, so `rerender()` keeps them.
   - Browser-only globals (`window.Razorpay`) are faked with a small class that records its options (see `PayButton.test.tsx`).
 
+## Not built yet (future features)
+
+### Live stock updates with WebSockets
+- **Status:** postponed by the developer; nothing is implemented yet. Treat this as a design sketch, and build it only when asked.
+- **Goal:** stock numbers (and "Out of stock") change on open product pages and cards instantly, without reloading, when someone buys, cancels, or staff edit a product.
+- **Backend sketch:**
+  - Django Channels with an ASGI server. Gunicorn would run `uvicorn` workers, or Daphne would be used; `config/asgi.py` routes `ws/` to a consumer.
+  - A Redis channel layer; Valkey on AWS works the same.
+  - One group per product (or one "stock" group).
+  - Broadcast `{product_id, stock}` from `orders/services.place_order()` / `change_status()` (on cancel) and from product saves, via `transaction.on_commit` so only committed stock is sent.
+  - Read-only for clients, with no authentication needed for public stock.
+- **Frontend sketch:** one shared WebSocket connection (a hook such as `useLiveStock`) that reconnects with backoff. It updates the TanStack Query cache (`['product', slug]` and the matching entries in `['products', …]`) with `setQueryData` instead of refetching.
+- **Deployment notes:**
+  - ALB and CloudFront both support WebSockets. The `/ws/*` behaviour needs caching disabled and all viewer headers forwarded (the `Upgrade` / `Connection` handshake).
+  - The web container must run the ASGI server.
+  - Locally, `runserver` serves ASGI once `daphne` is in `INSTALLED_APPS`. The browser connects straight to `ws://localhost:8000/ws/` (derived from `VITE_API_URL`, as there's no Vite proxy), and on AWS to `wss://<cloudfront domain>/ws/`.
+- **Tests:** Channels' `WebsocketCommunicator` for the consumer and the broadcast-on-commit; on the frontend, a fake WebSocket class like the fake `window.Razorpay` in `PayButton.test.tsx`.
+
 ## Conventions
 - Code comments are plain-English explanations of *why* (this is a learning project); match that style.
 - Commit messages must not contain `Co-Authored-By: Claude` or "Generated with Claude Code" lines.
