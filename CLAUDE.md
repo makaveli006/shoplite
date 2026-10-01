@@ -71,10 +71,27 @@ Everything comes from env vars via the `env_bool` / `env_list` helpers in `confi
   - **Steps:** OIDC → ECR push (tag = commit SHA) → migrate one-off task, which must exit 0 → rolling deploy of the web and worker services → frontend built with `VITE_API_URL=/api` → S3 sync and `index.html` invalidation.
   - **Task definitions:** the families and container names (`web`, `worker`, `migrate`) must match the ones in AWS. The pipeline downloads the **current** revision and only swaps the image, so it owns the image tag; a revision edited by hand must start from the latest one.
   - **OIDC:** the repository uses GitHub's immutable subject, so the deploy role's trust policy `sub` has the form `repo:<owner>@<owner-id>/<repo>@<repo-id>:environment:production`.
-  - **Temporary trigger:** `deploy.yml` has a `push: branches: [feature/aws-deploy]` trigger that must be removed before the branch is merged.
+  - **Feature branches:** `deploy.yml` is on `main`, so a feature branch is deployed with "Run workflow" (choose the branch); there is no push trigger.
   - **Checks:** validate the workflow with `docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint`.
 - **Console pieces** live in `deploy/aws/`: IAM policy and task-definition templates with `<PLACEHOLDERS>`, and the CloudFront Function for SPA routing (default behaviour only, so API 404s stay 404s). Filled copies are `*.local.*` and git-ignored; the repository is public, so the AWS account ID, the origin-verify secret and other real IDs must never be committed.
-- **Docs:** `INTERVIEW-DEPLOYMENT.md` explains the manual deployment (architecture, IAM, CI/CD, costs, the problems hit, interview Q&A). Keep it in sync when the deployment design changes; a Terraform rebuild is planned under `infra/terraform/` with its own `INTERVIEW-TERRAFORM.md`.
+- **Docs:** `INTERVIEW-DEPLOYMENT.md` explains the manual deployment (architecture, IAM, CI/CD, costs, the problems hit, interview Q&A). Keep it in sync when the deployment design changes.
+
+### Terraform (`infra/terraform/`, branch `feature/terraform`)
+- **What:** the same AWS architecture as code: a flat root module, one file per area (`network.tf`, `security_groups.tf`, `database.tf`, `storage.tf`, `secrets.tf`, `iam.tf`, `github_oidc.tf`, `alb.tf`, `ecs.tf`, `cdn.tf`, `monitoring.tf`). It uses no community modules. `bootstrap/` creates the S3 state bucket (with local state); the main configuration uses the S3 backend with `use_lockfile = true` (bucket and profile in the git-ignored `backend.hcl`).
+- **Who runs it:** the developer runs `plan` / `apply` / `destroy` in their own terminal with the AWS profile `shoplite-terraform`. The provider pins `profile` and `allowed_account_ids`, so other keys or accounts are refused. Never ask for or print the key. I only run `terraform fmt -recursive` and `terraform init -backend=false` + `terraform validate`; CI runs the same checks in the `terraform` job.
+- **Secrets never touch the state:**
+  - The Django secret key and the DB password are `ephemeral "random_password"`; the superuser and Razorpay secrets are ephemeral `TF_VAR_*` variables.
+  - All of them are written via write-only arguments (`value_wo`, `password_wo`). They're only re-sent when `secrets_version` changes.
+  - The origin-verify header secret is a normal `random_password` (CloudFront needs it as a plain argument).
+- **The pipeline owns the image:** the ECS services have `lifecycle { ignore_changes = [task_definition] }`. The task definitions start with the tag `not-built-yet` and `app_desired_count = 0`. The first pipeline run pushes the images, then `app_desired_count = 1`.
+- **Teardown:** `force_destroy` / `force_delete` on the buckets and ECR, and RDS `skip_final_snapshot`, so `terraform destroy` removes everything. Task-definition revisions registered by the pipeline aren't in the state; deregister them by hand.
+- **Drift (keep this behaviour when changing the code):**
+  - `terraform plan` reports hand-made console changes to managed resources, and `apply` reverts them. The demo is the `/ecs/shoplite-web` retention changed to 3 days, which plans as `retention_in_days = 3 -> 1`.
+  - Pipeline deploys must **not** show as drift: that's what `ignore_changes = [task_definition]` is for. After a deploy, the plan should not touch the services.
+  - Avoid making IAM policy documents depend on attributes of resources that change often. Referencing `aws_ecs_service.*.id` made the deploy policy show "known after apply" whenever a service changed, so the service ARNs are built from names in `github_oidc.tf`.
+  - Security-group rules are separate `aws_vpc_security_group_*_rule` resources, so a rule added by hand is **not** detected. Only resources in the state are compared.
+- **Docs:** `INTERVIEW-TERRAFORM.md` explains the code and the real apply/test/destroy run. Keep it in sync when the Terraform design changes.
+- **Real values:** `terraform.tfvars` (git-ignored; it holds the account ID). The `.example` files show the shape. Commit `.terraform.lock.hcl` (locked for windows_amd64 and linux_amd64).
 
 ### Search (`catalog/search.py`)
 - **One place:** all search rules live in `catalog/search.py`. `ProductViewSet.filter_backends = [DjangoFilterBackend, ProductSearchFilter, ProductOrderingFilter]` (`catalog/filters.py`); DRF's `SearchFilter` is no longer used for products.

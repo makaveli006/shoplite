@@ -106,3 +106,32 @@ jobs:
 
       - name: Type check and production build
         run: npm run build
+
+  terraform:
+    name: Terraform (format and validate)
+    runs-on: ubuntu-latest
+    # No AWS access needed: these checks only read the .tf files and download the providers
+    # (the exact versions recorded in .terraform.lock.hcl).
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.4
+          terraform_wrapper: false
+
+      - name: Formatting (terraform fmt)
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: Validate the state bucket configuration
+        working-directory: infra/terraform/bootstrap
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: Validate the main configuration
+        working-directory: infra/terraform
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate

@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars (git-ignored: the repository is public) and fill in.
+account_id  = "123456789012"
+admin_email = "you@example.com"
+
+# Optional
+# razorpay_key_id   = "rzp_test_..."   # the public key id; the two secrets are set in the terminal
+# alarm_email       = "you@example.com"
+# app_desired_count = 1                # 0 until the pipeline has pushed the first images
