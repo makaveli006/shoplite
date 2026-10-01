@@ -158,7 +158,48 @@ Emails sent by a task that the test calls directly land in `mail.outbox`. Celery
 
 ## Not built yet (future features)
 
-### Live stock updates with WebSockets
+The developer picks which one to build next; write a plan first, then build it on its own `feature/*` branch. Suggested order: 1 → 2 → 3, then the rest.
+
+### 1. Razorpay refunds (suggested next)
+- **Goal:** a staff "Refund" action for orders that were paid and then cancelled. Today `Payment.needs_refund` only flags them (`payments/models.py`, shown in the Django admin).
+- **Sketch:**
+  - Add a function in `payments/gateway.py` that calls Razorpay's refund API. It stays the only Razorpay-aware module.
+  - Add a `Refund` model (amount in paise, status, Razorpay refund ID).
+  - Confirm via the `refund.processed` / `refund.failed` webhooks, reusing the `WebhookEvent` dedup.
+  - Make it idempotent: no double refunds. Lock the `Payment` row, like `mark_paid()` does.
+  - Email the customer through `core.emails.send_email()`.
+
+### 2. Discount coupons
+- **Goal:** codes such as `DIWALI10`: a percentage or a fixed amount, with an expiry date, a usage limit and a minimum order, applied at checkout.
+- **Sketch:**
+  - Add a `Coupon` model.
+  - Validate and apply inside `orders/services.place_order()` (in the same transaction, locking the coupon row so the last use can't be taken twice).
+  - Snapshot the discount on the `Order`, like prices on `OrderItem`.
+  - Use `Decimal` maths, then paise for Razorpay.
+  - Frontend: a code field on the checkout page.
+
+### 3. Caching + query tuning
+- **Goal:** measurably faster product and category pages.
+- **Sketch:**
+  - Find N+1 queries (`assertNumQueries` tests, or django-debug-toolbar locally).
+  - Add `select_related` / `prefetch_related` where needed.
+  - Cache the category list and anonymous product-list pages in Redis (`CACHES` setting), and invalidate them when products or categories change.
+  - Record before/after numbers.
+
+### 4. Sales dashboard for staff
+- **Goal:** revenue per day, top products, and orders by status for the last N days, in the React staff area.
+- **Sketch:**
+  - A staff-only API built with database aggregation (`TruncDate`, `Sum`, `Count` over orders that aren't pending or cancelled).
+  - Charts in a new `/admin/dashboard` page.
+
+### 5. Login protection
+- **Goal:** slow down password guessing and fake sign-ups.
+- **Sketch:**
+  - Add DRF scoped throttles on login, register and token refresh. `DEFAULT_THROTTLE_RATES` already exists for password reset.
+  - Optionally add a temporary lock-out after repeated failures for one email.
+  - Review the security headers.
+
+### 6. Live stock updates with WebSockets
 - **Status:** postponed by the developer; nothing is implemented yet. Treat this as a design sketch, and build it only when asked.
 - **Goal:** stock numbers (and "Out of stock") change on open product pages and cards instantly, without reloading, when someone buys, cancels, or staff edit a product.
 - **Backend sketch:**
