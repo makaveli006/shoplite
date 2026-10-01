@@ -61,6 +61,7 @@ shoplite/
 │   ├── ci.yml               # tests on every push
 │   └── deploy.yml           # deployment to AWS after CI passes on main
 ├── deploy/aws/              # pieces pasted into the AWS Console: IAM policies, task definitions, CloudFront Function
+├── infra/terraform/         # the same AWS setup as code (Terraform), plus bootstrap/ for the state bucket
 ├── INTERVIEW-DEPLOYMENT.md  # the AWS deployment explained (architecture, security, costs, problems, Q&A)
 ├── backend/                 # Django project (managed with uv)
 │   ├── config/              # settings, URLs, Celery app
@@ -355,3 +356,49 @@ and git-ignored) and the CloudFront Function for React page addresses.
 The full walkthrough is in [`INTERVIEW-DEPLOYMENT.md`](INTERVIEW-DEPLOYMENT.md): the architecture,
 networking, security, costs (about ₹16 an hour while running), the problems found on the way and how
 they were fixed, the teardown, and interview questions.
+
+### The same setup with Terraform (`infra/terraform/`)
+
+The console build was rebuilt as code. Terraform reads the `.tf` files, creates everything in the
+right order, remembers what it made (its *state*, kept in an S3 bucket created by `bootstrap/`), and
+deletes all of it again with one command.
+
+```powershell
+cd infra\terraform
+terraform init "-backend-config=backend.hcl"   # quotes needed: PowerShell splits the argument at the dot
+terraform plan                                  # preview only: what would be created / changed / deleted
+terraform apply                                 # do it (type yes)
+terraform destroy                               # delete everything Terraform created (type yes)
+```
+
+Real values (account number, emails) go in `terraform.tfvars` and `backend.hcl`, both git-ignored;
+the `.example` files show the shape. Passwords are generated during the run or typed into hidden
+prompts, and are never saved in the state file.
+
+#### Drift: when AWS and the code disagree
+
+*Drift* is a change made by hand in the AWS Console that the code doesn't know about. `terraform plan`
+compares the real resources with the code, lists every difference, and `terraform apply` puts the
+code's version back. The code is the source of truth.
+
+Try it: change the retention of the log group `/ecs/shoplite-web` from 1 day to 3 days in the
+CloudWatch console, then run `terraform plan`:
+
+```
+~ resource "aws_cloudwatch_log_group" "app" {
+    ~ retention_in_days = 3 -> 1
+Plan: 0 to add, 1 to change, 0 to destroy.
+```
+
+`terraform apply` sets it back to 1 day. Scaling the web service to 2 containers in the ECS console
+works the same way (`desired_count = 2 -> 1`).
+
+Two things that are **not** reported as drift, on purpose or by design:
+
+- **New app versions from the deploy pipeline.** Every deploy registers a new ECS task-definition
+  revision with the new image. The services have `lifecycle { ignore_changes = [task_definition] }`,
+  so `terraform plan` stays quiet and never rolls the shop back to an older image. Terraform owns the
+  infrastructure; the pipeline owns which version of the app runs on it.
+- **Things added beside Terraform's resources.** An extra inbound rule added by hand to a security
+  group shows *nothing* in the plan, because Terraform only checks what is in its state, and that rule
+  never was. Teams catch those with AWS Config rules, or by making all changes go through code.

@@ -85,6 +85,11 @@ Everything comes from env vars via the `env_bool` / `env_list` helpers in `confi
   - The origin-verify header secret is a normal `random_password` (CloudFront needs it as a plain argument).
 - **The pipeline owns the image:** the ECS services have `lifecycle { ignore_changes = [task_definition] }`. The task definitions start with the tag `not-built-yet` and `app_desired_count = 0`. The first pipeline run pushes the images, then `app_desired_count = 1`.
 - **Teardown:** `force_destroy` / `force_delete` on the buckets and ECR, and RDS `skip_final_snapshot`, so `terraform destroy` removes everything. Task-definition revisions registered by the pipeline aren't in the state; deregister them by hand.
+- **Drift (keep this behaviour when changing the code):**
+  - `terraform plan` reports hand-made console changes to managed resources, and `apply` reverts them. The demo is the `/ecs/shoplite-web` retention changed to 3 days, which plans as `retention_in_days = 3 -> 1`.
+  - Pipeline deploys must **not** show as drift: that's what `ignore_changes = [task_definition]` is for. After a deploy, the plan should not touch the services.
+  - Avoid making IAM policy documents depend on attributes of resources that change often. Referencing `aws_ecs_service.*.id` made the deploy policy show "known after apply" whenever a service changed, so the service ARNs are built from names in `github_oidc.tf`.
+  - Security-group rules are separate `aws_vpc_security_group_*_rule` resources, so a rule added by hand is **not** detected. Only resources in the state are compared.
 - **Real values:** `terraform.tfvars` (git-ignored; it holds the account ID). The `.example` files show the shape. Commit `.terraform.lock.hcl` (locked for windows_amd64 and linux_amd64).
 
 ### Search (`catalog/search.py`)
