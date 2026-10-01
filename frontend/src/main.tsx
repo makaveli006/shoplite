@@ -7,7 +7,11 @@ import { RouterProvider } from 'react-router/dom'
 
 import { AuthProvider } from './auth/AuthProvider'
 import './index.css'
+import { watchForNewVersion } from './lib/newVersion'
 import { router } from './router'
+
+// After a deploy, an already-open shop reloads itself once instead of failing to open a page.
+watchForNewVersion()
 
 // The memory for everything loaded from the API.
 const queryClient = new QueryClient({
